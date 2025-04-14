@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { initMap, createSunOverlay } from '../lib/mapUtils';
 import { getSunPosition, getSunTrajectory } from '../lib/sunCalc';
 import 'leaflet/dist/leaflet.css';
+import * as d3 from 'd3';
 
 // Props
 const props = defineProps({
@@ -26,7 +27,13 @@ const emit = defineEmits(['update:coordinates']);
 // Map references
 const mapContainer = ref(null);
 const mapInstance = ref(null);
-const sunOverlay = ref(null);
+const sunOverlayContainer = ref(null);
+const sunOverlaySvg = ref(null);
+const lastCoordinates = ref({ lat: 0, lng: 0 });
+
+// Fixed dimensions for the sun trajectory overlay
+const OVERLAY_SIZE = 300; // pixels for width and height
+const OVERLAY_RADIUS = OVERLAY_SIZE / 2.5; // scale to fit within the overlay
 
 // Combine date and time for calculations
 const dateTime = computed(() => {
@@ -79,15 +86,37 @@ onMounted(() => {
   // Initialize the map
   mapInstance.value = initMap('map-container', props.coordinates);
   
-  // Create sun overlay
-  sunOverlay.value = createSunOverlay(mapInstance.value);
-  
   // Add click handler to update coordinates and center
   mapInstance.value.on('click', handleMapClick);
   
+  // Initialize the sun overlay
+  initSunOverlay();
+  
+  // Save initial coordinates
+  lastCoordinates.value = { ...props.coordinates };
+  
   // Initial update
-  updateMap();
+  updateSunTrajectory();
 });
+
+// Initialize the independent sun overlay
+function initSunOverlay() {
+  if (!sunOverlayContainer.value) return;
+  
+  // Create the SVG element
+  sunOverlaySvg.value = d3.select(sunOverlayContainer.value)
+    .append('svg')
+    .attr('width', OVERLAY_SIZE)
+    .attr('height', OVERLAY_SIZE)
+    .attr('class', 'sun-overlay-svg');
+  
+  // Add groups for trajectory and sun marker
+  sunOverlaySvg.value.append('g')
+    .attr('class', 'trajectory-path');
+  
+  sunOverlaySvg.value.append('g')
+    .attr('class', 'sun-marker');
+}
 
 // Handle map click
 function handleMapClick(e) {
@@ -99,6 +128,9 @@ function handleMapClick(e) {
   
   // Center map to clicked location
   mapInstance.value.setView([newCoordinates.lat, newCoordinates.lng], mapInstance.value.getZoom());
+  
+  // Save last coordinates
+  lastCoordinates.value = { ...newCoordinates };
   
   // Update coordinates via emit for two-way binding
   emit('update:coordinates', newCoordinates);
@@ -112,31 +144,180 @@ onUnmounted(() => {
     // Remove map
     mapInstance.value.remove();
   }
+  
+  // Clean up SVG if needed
+  if (sunOverlaySvg.value) {
+    sunOverlaySvg.value.remove();
+  }
 });
 
-// Update map when props change
-watch([() => props.coordinates, sunPosition, sunTrajectory], updateMap);
+// When coordinates change from outside (from a search), center the map
+watch(() => props.coordinates, (newCoords) => {
+  // Check if this is a significant change (from search)
+  const isDifferentLocation = 
+    Math.abs(newCoords.lat - lastCoordinates.value.lat) > 0.001 || 
+    Math.abs(newCoords.lng - lastCoordinates.value.lng) > 0.001;
+  
+  if (mapInstance.value && isDifferentLocation) {
+    // This is likely a search result or significant external update
+    mapInstance.value.setView([newCoords.lat, newCoords.lng]);
+    lastCoordinates.value = { ...newCoords };
+  }
+}, { deep: true });
 
-// Function to update the map
-function updateMap() {
-  if (!mapInstance.value || !sunOverlay.value) return;
+// Only update trajectory visualization when any props change
+watch([() => props.coordinates, sunPosition, sunTrajectory], () => {
+  // Update sun trajectory
+  updateSunTrajectory();
+});
+
+// Function to update the sun trajectory overlay
+function updateSunTrajectory() {
+  if (!sunOverlaySvg.value) return;
   
-  // Set map center to current coordinates
-  mapInstance.value.setView([props.coordinates.lat, props.coordinates.lng]);
+  const svg = sunOverlaySvg.value;
+  const center = { x: OVERLAY_SIZE / 2, y: OVERLAY_SIZE / 2 };
   
-  // Update sun trajectory path
-  sunOverlay.value.updateSunPath(sunTrajectory.value, props.coordinates);
+  // Clear existing elements
+  svg.select('.trajectory-path').selectAll('*').remove();
+  svg.select('.sun-marker').selectAll('*').remove();
   
-  // Update current sun position marker
-  sunOverlay.value.updateSunPosition(sunPosition.value, props.coordinates);
+  // Skip if no trajectory points
+  if (!sunTrajectory.value || sunTrajectory.value.length === 0) return;
+  
+  // Convert trajectory points to overlay coordinates
+  const pathPoints = sunTrajectory.value.map(point => {
+    return sunPositionToOverlayPoint(point.azimuth, point.altitude, center);
+  });
+  
+  // Create path line
+  const lineFunction = d3.line()
+    .x(d => d.x)
+    .y(d => d.y)
+    .curve(d3.curveBasis);
+  
+  // Add the path
+  svg.select('.trajectory-path')
+    .append('path')
+    .attr('d', lineFunction(pathPoints))
+    .attr('stroke', 'orange')
+    .attr('stroke-width', 3)
+    .attr('fill', 'none')
+    .attr('stroke-opacity', 0.7)
+    .attr('class', 'trajectory-path');
+  
+  // Add sunrise point (first point with altitude >= 0)
+  if (sunTrajectory.value[0].altitude >= 0) {
+    const sunrisePoint = sunPositionToOverlayPoint(
+      sunTrajectory.value[0].azimuth, 
+      sunTrajectory.value[0].altitude, 
+      center
+    );
+    
+    svg.select('.trajectory-path')
+      .append('circle')
+      .attr('cx', sunrisePoint.x)
+      .attr('cy', sunrisePoint.y)
+      .attr('r', 6)
+      .attr('fill', 'red')
+      .attr('stroke', 'white')
+      .attr('stroke-width', 2);
+  }
+  
+  // Add sunset point (last point with altitude >= 0)
+  const lastPoint = sunTrajectory.value[sunTrajectory.value.length - 1];
+  if (lastPoint.altitude >= 0) {
+    const sunsetPoint = sunPositionToOverlayPoint(
+      lastPoint.azimuth, 
+      lastPoint.altitude, 
+      center
+    );
+    
+    svg.select('.trajectory-path')
+      .append('circle')
+      .attr('cx', sunsetPoint.x)
+      .attr('cy', sunsetPoint.y)
+      .attr('r', 6)
+      .attr('fill', 'blue')
+      .attr('stroke', 'white')
+      .attr('stroke-width', 2);
+  }
+  
+  // Add current sun position marker (if above horizon)
+  if (sunPosition.value && sunPosition.value.altitude > 0) {
+    const sunPoint = sunPositionToOverlayPoint(
+      sunPosition.value.azimuth, 
+      sunPosition.value.altitude, 
+      center
+    );
+    
+    svg.select('.sun-marker')
+      .append('circle')
+      .attr('cx', sunPoint.x)
+      .attr('cy', sunPoint.y)
+      .attr('r', 8)
+      .attr('fill', 'yellow')
+      .attr('stroke', 'white')
+      .attr('stroke-width', 2)
+      .attr('filter', 'drop-shadow(0 0 6px rgba(255, 255, 0, 0.7))');
+      
+    // Add shadow line
+    const shadowAzimuth = sunPosition.value.azimuth + Math.PI;
+    const shadowScale = Math.min(30 / Math.tan(sunPosition.value.altitude), 100);
+    
+    const shadowX = sunPoint.x + shadowScale * Math.sin(shadowAzimuth);
+    const shadowY = sunPoint.y - shadowScale * Math.cos(shadowAzimuth);
+    
+    svg.select('.sun-marker')
+      .append('line')
+      .attr('x1', sunPoint.x)
+      .attr('y1', sunPoint.y)
+      .attr('x2', shadowX)
+      .attr('y2', shadowY)
+      .attr('stroke', 'rgba(0, 0, 0, 0.4)')
+      .attr('stroke-width', 2)
+      .attr('stroke-dasharray', '4 2');
+  }
+}
+
+// Convert sun position to overlay coordinates
+function sunPositionToOverlayPoint(azimuth, altitude, center) {
+  // Below horizon
+  if (altitude <= 0) {
+    // Extend point to horizon line
+    const horizonDist = OVERLAY_RADIUS * 1.5;
+    const dx = horizonDist * Math.sin(azimuth);
+    const dy = horizonDist * Math.cos(azimuth);
+    return { x: center.x + dx, y: center.y - dy };
+  }
+  
+  // Scale distance by altitude (higher altitude = closer to center)
+  // 0 altitude = horizon (max distance), π/2 altitude = zenith (min distance)
+  const distance = OVERLAY_RADIUS * (1 - altitude / (Math.PI / 2));
+  
+  // Convert polar to Cartesian coordinates
+  const dx = distance * Math.sin(azimuth);
+  const dy = distance * Math.cos(azimuth);
+  
+  // In SVG, y-axis is flipped (goes down), so we negate dy
+  return { x: center.x + dx, y: center.y - dy };
 }
 </script>
 
 <template>
-  <div ref="mapContainer" id="map-container" class="map-container"></div>
+  <div class="sun-map-container">
+    <div ref="mapContainer" id="map-container" class="map-container"></div>
+    <div ref="sunOverlayContainer" class="sun-overlay-container"></div>
+  </div>
 </template>
 
 <style scoped>
+.sun-map-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
 .map-container {
   position: absolute;
   top: 0;
@@ -144,6 +325,25 @@ function updateMap() {
   right: 0;
   bottom: 0;
   z-index: 1;
+}
+
+.sun-overlay-container {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  pointer-events: none;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  backdrop-filter: blur(2px);
+}
+
+:deep(.sun-overlay-svg) {
+  width: 100%;
+  height: 100%;
 }
 
 :deep(.leaflet-container) {
@@ -202,9 +402,5 @@ function updateMap() {
 /* Ensure trajectory elements are visible */
 :deep(.trajectory-path) {
   stroke-linecap: round;
-}
-
-:deep(.leaflet-overlay-pane svg) {
-  pointer-events: none;
 }
 </style> 
