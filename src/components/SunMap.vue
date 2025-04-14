@@ -128,15 +128,59 @@ function updateMap() {
   width: 100%;
 }
 
-:deep(.trajectory-path path) {
-  transition: stroke-dashoffset 0.3s ease;
+/* Map Language Indicator */
+:deep(.language-info) {
+  margin-bottom: 10px !important;
+  font-family: Arial, sans-serif;
+  user-select: none;
 }
 
-:deep(.sun-markers circle) {
-  transition: transform 0.3s ease;
+:deep(.language-indicator) {
+  transition: color 0.3s ease;
+}
+
+/* Layer Control Styling */
+:deep(.leaflet-control-layers) {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  padding: 8px;
+  min-width: 200px;
+  font-family: Arial, sans-serif;
+  margin-top: 10px;
+}
+
+:deep(.leaflet-control-layers-list) {
+  margin-bottom: 5px;
+}
+
+:deep(.leaflet-control-layers-base label) {
+  margin-bottom: 8px;
+  padding: 4px;
+  border-radius: 4px;
+  display: block;
+  transition: background-color 0.2s ease;
+}
+
+:deep(.leaflet-control-layers-base label:hover) {
+  background-color: #f0f8ff;
+}
+
+:deep(.leaflet-control-layers-selector) {
+  margin-right: 6px;
+  cursor: pointer;
 }
 
 :deep(.leaflet-control-container) {
   z-index: 10;
+}
+
+/* Ensure trajectory elements are visible */
+:deep(.trajectory-path) {
+  stroke-linecap: round;
+}
+
+:deep(.leaflet-overlay-pane svg) {
+  pointer-events: none;
 }
 </style> 
