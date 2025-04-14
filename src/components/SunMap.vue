@@ -20,6 +20,9 @@ const props = defineProps({
   }
 });
 
+// Emits
+const emit = defineEmits(['update:coordinates']);
+
 // Map references
 const mapContainer = ref(null);
 const mapInstance = ref(null);
@@ -79,13 +82,34 @@ onMounted(() => {
   // Create sun overlay
   sunOverlay.value = createSunOverlay(mapInstance.value);
   
+  // Add click handler to update coordinates and center
+  mapInstance.value.on('click', handleMapClick);
+  
   // Initial update
   updateMap();
 });
 
+// Handle map click
+function handleMapClick(e) {
+  // Get the clicked coordinates
+  const newCoordinates = {
+    lat: e.latlng.lat,
+    lng: e.latlng.lng
+  };
+  
+  // Center map to clicked location
+  mapInstance.value.setView([newCoordinates.lat, newCoordinates.lng], mapInstance.value.getZoom());
+  
+  // Update coordinates via emit for two-way binding
+  emit('update:coordinates', newCoordinates);
+}
+
 // Clean up when component is destroyed
 onUnmounted(() => {
   if (mapInstance.value) {
+    // Remove event listeners
+    mapInstance.value.off('click', handleMapClick);
+    // Remove map
     mapInstance.value.remove();
   }
 });

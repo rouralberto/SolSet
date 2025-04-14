@@ -100,7 +100,7 @@ const setLoading = (isLoading) => {
           </div>
         </div>
         <SunMap 
-          :coordinates="coordinates" 
+          v-model:coordinates="coordinates" 
           :date="date"
           :time="time"
         />
