@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
-import { initMap, createSunOverlay } from '../lib/mapUtils';
+import { initMap } from '../lib/mapUtils';
 import { getSunPosition, getSunTrajectory } from '../lib/sunCalc';
 import 'leaflet/dist/leaflet.css';
 import * as d3 from 'd3';
@@ -228,17 +228,14 @@ function updateSunTrajectory() {
     .y(d => d.y)
     .curve(d3.curveBasis);
   
-  // Add the path only if we have daylight points
-  if (pathPoints.length > 0) {
-    svg.select('.trajectory-path')
-      .append('path')
-      .attr('d', lineFunction(pathPoints))
-      .attr('stroke', 'orange')
-      .attr('stroke-width', 3)
-      .attr('fill', 'none')
-      .attr('stroke-opacity', 0.7)
-      .attr('class', 'trajectory-path');
-  }
+  svg.select('.trajectory-path')
+    .append('path')
+    .attr('d', lineFunction(pathPoints))
+    .attr('stroke', 'orange')
+    .attr('stroke-width', 3)
+    .attr('fill', 'none')
+    .attr('stroke-opacity', 0.7)
+    .attr('class', 'trajectory-path');
   
   // Get times from the trajectory
   if (daytimePoints.length > 0) {
