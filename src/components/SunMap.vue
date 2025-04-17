@@ -89,6 +89,9 @@ onMounted(() => {
   // Add click handler to update coordinates and center
   mapInstance.value.on('click', handleMapClick);
   
+  // Add move handler to update coordinates in real-time as the map is being dragged
+  mapInstance.value.on('move', handleMapMove);
+  
   // Initialize the sun overlay
   initSunOverlay();
   
@@ -136,11 +139,37 @@ function handleMapClick(e) {
   emit('update:coordinates', newCoordinates);
 }
 
+// Handle real-time map movement
+function handleMapMove(e) {
+  // Get the new center coordinates
+  const center = mapInstance.value.getCenter();
+  const newCoordinates = {
+    lat: center.lat,
+    lng: center.lng
+  };
+  
+  // Update coordinates via emit for two-way binding
+  // This updates in real-time as the map moves
+  emit('update:coordinates', newCoordinates);
+  
+  // Only update lastCoordinates (and potentially trigger expensive operations)
+  // if the change is significant
+  const isDifferentLocation = 
+    Math.abs(newCoordinates.lat - lastCoordinates.value.lat) > 0.0001 || 
+    Math.abs(newCoordinates.lng - lastCoordinates.value.lng) > 0.0001;
+  
+  if (isDifferentLocation) {
+    // Save last coordinates
+    lastCoordinates.value = { ...newCoordinates };
+  }
+}
+
 // Clean up when component is destroyed
 onUnmounted(() => {
   if (mapInstance.value) {
     // Remove event listeners
     mapInstance.value.off('click', handleMapClick);
+    mapInstance.value.off('move', handleMapMove);
     // Remove map
     mapInstance.value.remove();
   }
@@ -362,7 +391,6 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   pointer-events: none;
   background-color: rgba(255, 255, 255, 0.2);
   border-radius: 50%;
-  backdrop-filter: blur(2px);
 }
 
 :deep(.sun-overlay-svg) {
