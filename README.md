@@ -22,8 +22,10 @@ SolSet is an interactive web application that visualizes the sun's position and 
 - Vite (Build tool)
 - Leaflet.js (Map rendering)
 - SunCalc.js (Sun calculations)
-- Tailwind CSS (Styling)
+- Bootstrap 5 (Styling)
+- Bootstrap Icons
 - D3.js (SVG manipulation)
+- Axios (HTTP client)
 
 ## Getting Started
 
