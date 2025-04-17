@@ -19,7 +19,18 @@ export function getSunTimes(date, lat, lng) {
  * @returns {Object} Position object with azimuth and altitude
  */
 export function getSunPosition(dateTime, lat, lng) {
-  return SunCalc.getPosition(dateTime, lat, lng);
+  // Ensure lat and lng are numbers and within valid ranges
+  const validLat = Number(lat);
+  const validLng = Number(lng);
+  
+  if (isNaN(validLat) || isNaN(validLng)) {
+    console.error('Invalid coordinates:', {lat, lng, validLat, validLng});
+    return {azimuth: 0, altitude: 0};
+  }
+  
+  const result = SunCalc.getPosition(dateTime, validLat, validLng);
+  
+  return result;
 }
 
 /**
@@ -31,29 +42,36 @@ export function getSunPosition(dateTime, lat, lng) {
  * @returns {Array} Array of points with time, azimuth, altitude
  */
 export function getSunTrajectory(date, lat, lng, steps = 24) {
-  const times = getSunTimes(date, lat, lng);
+  // Create a clean date object with just the date portion to avoid timezone issues
+  const cleanDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  
+  const times = getSunTimes(cleanDate, lat, lng);
   const sunrise = times.sunrise;
   const sunset = times.sunset;
-  
-  // Handle polar day/night
+
+  // Handle polar day/night or invalid times
   if (isNaN(sunrise.getTime()) || isNaN(sunset.getTime())) {
     // Check if it's polar day or night
-    const noonPosition = getSunPosition(new Date(date.setHours(12, 0, 0, 0)), lat, lng);
+    const noonDate = new Date(cleanDate.getFullYear(), cleanDate.getMonth(), cleanDate.getDate(), 12, 0, 0, 0);
+    const noonPosition = getSunPosition(noonDate, lat, lng);
     
     if (noonPosition.altitude > 0) {
       // Polar day: simulate 24 hours of daylight
-      return calculateTrajectoryPoints(date, lat, lng, 0, 24, steps);
+      return calculateTrajectoryPoints(cleanDate, lat, lng, 0, 24, steps);
     } else {
       // Polar night: no trajectory to calculate
       return [];
     }
   }
   
-  // Get hours for sunrise and sunset
+  // Get hours for sunrise and sunset in local time
   const sunriseHour = sunrise.getHours() + sunrise.getMinutes() / 60;
   const sunsetHour = sunset.getHours() + sunset.getMinutes() / 60;
   
-  return calculateTrajectoryPoints(date, lat, lng, sunriseHour, sunsetHour, steps);
+  // Handle cases where sunset is before sunrise (crossing midnight)
+  const adjustedSunsetHour = sunsetHour < sunriseHour ? sunsetHour + 24 : sunsetHour;
+  
+  return calculateTrajectoryPoints(cleanDate, lat, lng, sunriseHour, adjustedSunsetHour, steps);
 }
 
 /**
@@ -68,14 +86,23 @@ function calculateTrajectoryPoints(date, lat, lng, startHour, endHour, steps) {
   // Calculate step size
   const hourRange = endHour - startHour;
   const stepSize = hourRange / steps;
-  
+
+  // Create points for the trajectory
   for (let i = 0; i <= steps; i++) {
     const hour = startHour + i * stepSize;
-    const timeMs = baseDate.getTime() + hour * 60 * 60 * 1000;
-    const pointTime = new Date(timeMs);
     
-    // Skip if we've passed to the next day
-    if (pointTime.getTime() - baseDate.getTime() >= dayMs) continue;
+    // Handle hours that cross into the next day
+    const adjustedHour = hour % 24;
+    const dayOffset = Math.floor(hour / 24);
+    
+    // Create a new date for this point
+    const pointTime = new Date(baseDate);
+    pointTime.setHours(Math.floor(adjustedHour), Math.round((adjustedHour % 1) * 60), 0, 0);
+    
+    // Add day offset if we cross midnight
+    if (dayOffset > 0) {
+      pointTime.setDate(pointTime.getDate() + dayOffset);
+    }
     
     const position = getSunPosition(pointTime, lat, lng);
     

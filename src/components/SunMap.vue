@@ -37,6 +37,7 @@ const OVERLAY_RADIUS = OVERLAY_SIZE / 2.5; // scale to fit within the overlay
 
 // Combine date and time for calculations
 const dateTime = computed(() => {
+  // Create date with today's date
   const result = new Date(props.date);
   
   // If time is provided, set hours and minutes
@@ -53,21 +54,26 @@ const dateTime = computed(() => {
 
 // Current sun position 
 const sunPosition = computed(() => {
-  return getSunPosition(
+  const position = getSunPosition(
     dateTime.value,
     props.coordinates.lat,
     props.coordinates.lng
   );
+  
+  return position;
 });
 
 // Daily sun trajectory
 const sunTrajectory = computed(() => {
-  return getSunTrajectory(
+  // Log relevant information for debugging
+  const result = getSunTrajectory(
     props.date,
     props.coordinates.lat,
     props.coordinates.lng,
     48 // More points for smoother arc
   );
+  
+  return result;
 });
 
 // Initialize map
@@ -79,7 +85,7 @@ onMounted(() => {
     const link = document.createElement('link');
     link.id = 'leaflet-styles';
     link.rel = 'stylesheet';
-    link.href = 'https://unpkg.com/leaflet@1.9.3/dist/leaflet.css';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
     document.head.appendChild(link);
   }
   
@@ -212,10 +218,15 @@ function updateSunTrajectory() {
   svg.select('.sun-marker').selectAll('*').remove();
   
   // Skip if no trajectory points
-  if (!sunTrajectory.value || sunTrajectory.value.length === 0) return;
+  if (!sunTrajectory.value || sunTrajectory.value.length === 0) return;  
   
   // Filter to only include points where the sun is above the horizon (altitude > 0)
   const daytimePoints = sunTrajectory.value.filter(point => point.altitude > 0);
+  
+  // Skip if no daytime points
+  if (daytimePoints.length === 0) {
+    return;
+  }
   
   // Convert trajectory points to overlay coordinates
   const pathPoints = daytimePoints.map(point => {
