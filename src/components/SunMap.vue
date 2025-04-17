@@ -185,8 +185,11 @@ function updateSunTrajectory() {
   // Skip if no trajectory points
   if (!sunTrajectory.value || sunTrajectory.value.length === 0) return;
   
+  // Filter to only include points where the sun is above the horizon (altitude > 0)
+  const daytimePoints = sunTrajectory.value.filter(point => point.altitude > 0);
+  
   // Convert trajectory points to overlay coordinates
-  const pathPoints = sunTrajectory.value.map(point => {
+  const pathPoints = daytimePoints.map(point => {
     return sunPositionToOverlayPoint(point.azimuth, point.altitude, center);
   });
   
@@ -196,51 +199,63 @@ function updateSunTrajectory() {
     .y(d => d.y)
     .curve(d3.curveBasis);
   
-  // Add the path
-  svg.select('.trajectory-path')
-    .append('path')
-    .attr('d', lineFunction(pathPoints))
-    .attr('stroke', 'orange')
-    .attr('stroke-width', 3)
-    .attr('fill', 'none')
-    .attr('stroke-opacity', 0.7)
-    .attr('class', 'trajectory-path');
-  
-  // Add sunrise point (first point with altitude >= 0)
-  if (sunTrajectory.value[0].altitude >= 0) {
-    const sunrisePoint = sunPositionToOverlayPoint(
-      sunTrajectory.value[0].azimuth, 
-      sunTrajectory.value[0].altitude, 
-      center
-    );
-    
+  // Add the path only if we have daylight points
+  if (pathPoints.length > 0) {
     svg.select('.trajectory-path')
-      .append('circle')
-      .attr('cx', sunrisePoint.x)
-      .attr('cy', sunrisePoint.y)
-      .attr('r', 6)
-      .attr('fill', 'red')
-      .attr('stroke', 'white')
-      .attr('stroke-width', 2);
+      .append('path')
+      .attr('d', lineFunction(pathPoints))
+      .attr('stroke', 'orange')
+      .attr('stroke-width', 3)
+      .attr('fill', 'none')
+      .attr('stroke-opacity', 0.7)
+      .attr('class', 'trajectory-path');
   }
   
-  // Add sunset point (last point with altitude >= 0)
-  const lastPoint = sunTrajectory.value[sunTrajectory.value.length - 1];
-  if (lastPoint.altitude >= 0) {
-    const sunsetPoint = sunPositionToOverlayPoint(
-      lastPoint.azimuth, 
-      lastPoint.altitude, 
-      center
-    );
+  // Get times from the trajectory
+  if (daytimePoints.length > 0) {
+    // Sort the points by time to ensure correct ordering
+    const sortedPoints = [...daytimePoints].sort((a, b) => a.time - b.time);
     
-    svg.select('.trajectory-path')
-      .append('circle')
-      .attr('cx', sunsetPoint.x)
-      .attr('cy', sunsetPoint.y)
-      .attr('r', 6)
-      .attr('fill', 'blue')
-      .attr('stroke', 'white')
-      .attr('stroke-width', 2);
+    // First point is sunrise (east)
+    const sunrisePoint = sortedPoints[0];
+    // Last point is sunset (west)
+    const sunsetPoint = sortedPoints[sortedPoints.length - 1];
+    
+    // Add sunrise marker (east)
+    if (sunrisePoint) {
+      const sunriseOverlayPoint = sunPositionToOverlayPoint(
+        sunrisePoint.azimuth, 
+        sunrisePoint.altitude, 
+        center
+      );
+      
+      svg.select('.trajectory-path')
+        .append('circle')
+        .attr('cx', sunriseOverlayPoint.x)
+        .attr('cy', sunriseOverlayPoint.y)
+        .attr('r', 6)
+        .attr('fill', 'red')
+        .attr('stroke', 'white')
+        .attr('stroke-width', 2);
+    }
+    
+    // Add sunset marker (west)
+    if (sunsetPoint) {
+      const sunsetOverlayPoint = sunPositionToOverlayPoint(
+        sunsetPoint.azimuth, 
+        sunsetPoint.altitude, 
+        center
+      );
+      
+      svg.select('.trajectory-path')
+        .append('circle')
+        .attr('cx', sunsetOverlayPoint.x)
+        .attr('cy', sunsetOverlayPoint.y)
+        .attr('r', 6)
+        .attr('fill', 'blue')
+        .attr('stroke', 'white')
+        .attr('stroke-width', 2);
+    }
   }
   
   // Add current sun position marker (if above horizon)
@@ -261,22 +276,26 @@ function updateSunTrajectory() {
       .attr('stroke-width', 2)
       .attr('filter', 'drop-shadow(0 0 6px rgba(255, 255, 0, 0.7))');
       
-    // Add shadow line
-    const shadowAzimuth = sunPosition.value.azimuth + Math.PI;
-    const shadowScale = Math.min(30 / Math.tan(sunPosition.value.altitude), 100);
-    
-    const shadowX = sunPoint.x + shadowScale * Math.sin(shadowAzimuth);
-    const shadowY = sunPoint.y - shadowScale * Math.cos(shadowAzimuth);
-    
+    // Add shadow line from sun to center (representing shadow at the selected location)
     svg.select('.sun-marker')
       .append('line')
       .attr('x1', sunPoint.x)
       .attr('y1', sunPoint.y)
-      .attr('x2', shadowX)
-      .attr('y2', shadowY)
+      .attr('x2', center.x)
+      .attr('y2', center.y)
       .attr('stroke', 'rgba(0, 0, 0, 0.4)')
       .attr('stroke-width', 2)
       .attr('stroke-dasharray', '4 2');
+    
+    // Add shadow indicator at center
+    svg.select('.sun-marker')
+      .append('circle')
+      .attr('cx', center.x)
+      .attr('cy', center.y)
+      .attr('r', 3)
+      .attr('fill', 'rgba(0, 0, 0, 0.5)')
+      .attr('stroke', 'white')
+      .attr('stroke-width', 1);
   }
 }
 
@@ -296,7 +315,12 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   const distance = OVERLAY_RADIUS * (1 - altitude / (Math.PI / 2));
   
   // Convert polar to Cartesian coordinates
-  const dx = distance * Math.sin(azimuth);
+  // Important: in astronomy, azimuth is measured clockwise from north:
+  // North = 0, East = π/2, South = π, West = 3π/2
+  
+  // Negate the x direction (dx) to flip east and west
+  // This ensures the sun rises in the east (right) and sets in the west (left)
+  const dx = -distance * Math.sin(azimuth);
   const dy = distance * Math.cos(azimuth);
   
   // In SVG, y-axis is flipped (goes down), so we negate dy
