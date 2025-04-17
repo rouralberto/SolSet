@@ -146,7 +146,7 @@ const azimuthDirection = computed(() => {
       <!-- Status -->
       <div class="mt-3 py-1 px-2 rounded text-center small" 
         :class="isSunUp ? 'bg-warning-subtle text-warning-emphasis' : 'bg-info-subtle text-info-emphasis'">
-        {{ isSunUp ? 'Sun is up' : 'Sun is down' }}
+        Sun is {{ isSunUp ? 'up' : 'down' }}
       </div>
     </div>
   </div>
