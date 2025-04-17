@@ -6,22 +6,45 @@ import DaySlider from './components/DaySlider.vue';
 import TimeSlider from './components/TimeSlider.vue';
 import SunInfo from './components/SunInfo.vue';
 
-const coordinates = ref({ lat: 37.7749, lng: -122.4194 }); // San Francisco coordinates
+const coordinates = ref({ lat: 43.3183, lng: -1.9812 }); // Donostia - San Sebastián coordinates
 const date = ref(new Date());
 const time = ref(new Date());
 const loading = ref(false);
 
-// Set default date to today
+// Set default date to today and attempt to get user location
 onMounted(() => {
   // Default to current date and time
   const now = new Date();
   date.value = now;
   time.value = now;
+  
+  // Get user's location if geolocation is available
+  if (navigator.geolocation) {
+    loading.value = true;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        // Update coordinates with user's location
+        coordinates.value = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        loading.value = false;
+        console.log('User location detected:', coordinates.value);
+      },
+      (error) => {
+        console.error('Geolocation error:', error);
+        loading.value = false;
+        // Keep default coordinates if geolocation fails
+      }
+    );
+  }
 });
 
 // Update coordinates from location input
 const updateCoordinates = (newCoords) => {
-  coordinates.value = newCoords;
+  // Create a new coordinates object to ensure Vue reactivity
+  coordinates.value = { ...newCoords };
+  console.log('Updated coordinates:', coordinates.value);
 };
 
 // Update date from day slider

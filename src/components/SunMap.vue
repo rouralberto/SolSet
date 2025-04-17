@@ -188,15 +188,27 @@ onUnmounted(() => {
 
 // When coordinates change from outside (from a search), center the map
 watch(() => props.coordinates, (newCoords) => {
-  // Check if this is a significant change (from search)
+  // Check if this is a significant change (from search) or if forceUpdate flag is set
   const isDifferentLocation = 
     Math.abs(newCoords.lat - lastCoordinates.value.lat) > 0.001 || 
-    Math.abs(newCoords.lng - lastCoordinates.value.lng) > 0.001;
+    Math.abs(newCoords.lng - lastCoordinates.value.lng) > 0.001 ||
+    newCoords.forceUpdate === true;
   
   if (mapInstance.value && isDifferentLocation) {
     // This is likely a search result or significant external update
-    mapInstance.value.setView([newCoords.lat, newCoords.lng]);
+    // Force map to refresh by invalidating size first
+    mapInstance.value.invalidateSize();
+    // Then set the view to the new coordinates
+    mapInstance.value.setView([newCoords.lat, newCoords.lng], mapInstance.value.getZoom());
+    // Ensure it's really centered by forcing another update after a tiny delay
+    setTimeout(() => {
+      mapInstance.value?.setView([newCoords.lat, newCoords.lng], mapInstance.value.getZoom());
+    }, 10);
+    
     lastCoordinates.value = { ...newCoords };
+    
+    // Remove the forceUpdate flag after using it
+    delete lastCoordinates.value.forceUpdate;
   }
 }, { deep: true });
 

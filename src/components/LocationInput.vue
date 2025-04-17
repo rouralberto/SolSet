@@ -28,7 +28,12 @@ async function handleSearch() {
       
       // Basic validation
       if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-        emit('update-coordinates', { lat, lng });
+        const coords = {
+          lat,
+          lng,
+          forceUpdate: true // Force map update
+        };
+        emit('update-coordinates', coords);
         isSearching.value = false;
         emit('loading', false);
         return;
@@ -36,7 +41,11 @@ async function handleSearch() {
     }
     
     // If not coordinates, try geocoding
-    const coords = await geocodeAddress(addressInput.value);
+    const response = await geocodeAddress(addressInput.value);
+    const coords = {
+      ...response,
+      forceUpdate: true // Force map update
+    };
     emit('update-coordinates', coords);
   } catch (err) {
     error.value = err.message || 'Error finding location. Please try again.';
@@ -62,17 +71,23 @@ function handleGeolocate() {
     // Success
     (position) => {
       console.log('Geolocation succeeded:', position.coords);
+      
+      // Create a new coordinates object with forceUpdate flag
       const coords = {
         lat: position.coords.latitude,
-        lng: position.coords.longitude
+        lng: position.coords.longitude,
+        forceUpdate: true // Force map update
       };
       
       // Update the input field with the coordinates
-      addressInput.value = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+      addressInput.value = `${coords.lat}, ${coords.lng}`;
       
-      // Emit the coordinates
-      emit('update-coordinates', coords);
-      emit('loading', false);
+      // Force a delay before emitting to ensure proper rendering order
+      setTimeout(() => {
+        // Emit the coordinates
+        emit('update-coordinates', coords);
+        emit('loading', false);
+      }, 150);
     },
     // Error
     (err) => {
