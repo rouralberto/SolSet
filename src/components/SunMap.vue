@@ -398,9 +398,6 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
         :sunPosition="sunPosition" 
         :size="HOUSE_SIZE"
       />
-      <button @click="emit('update:showHouse', false)" class="house-toggle-btn">
-        <i class="bi bi-x"></i>
-      </button>
     </div>
   </div>
 </template>
@@ -445,24 +442,6 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   border-radius: 5px;
   padding: 0;
   overflow: visible; /* Allow shadows to extend beyond container */
-}
-
-.house-toggle-btn {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  border: none;
-  background: none;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 50%;
-  color: #666;
-  z-index: 16;
-}
-
-.house-toggle-btn:hover {
-  background-color: rgba(0, 0, 0, 0.1);
 }
 
 :deep(.house-layout-svg) {
