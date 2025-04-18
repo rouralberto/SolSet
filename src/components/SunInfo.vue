@@ -15,6 +15,10 @@ const props = defineProps({
   time: {
     type: Date,
     required: true
+  },
+  houseOrientation: {
+    type: Object,
+    default: () => ({ angle: 0, label: '0° (N)' })
   }
 });
 
@@ -141,6 +145,16 @@ const azimuthDirection = computed(() => {
           <template v-if="isSunUp">{{ shadowLength.toFixed(1) }}m</template>
           <template v-else>--</template>
         </span>
+      </div>
+      
+      <!-- House Orientation -->
+      <hr class="my-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted">House Orientation:</span>
+        <span class="fw-medium ms-2">{{ houseOrientation.label }}</span>
+      </div>
+      <div class="small text-muted mb-2">
+        Optimized for best solar exposure throughout the year
       </div>
       
       <!-- Status -->

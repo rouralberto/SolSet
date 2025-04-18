@@ -189,4 +189,107 @@ export function dateToDayOfYear(date) {
   const diff = date - start;
   const oneDay = 1000 * 60 * 60 * 24;
   return Math.floor(diff / oneDay);
+}
+
+/**
+ * Calculate optimal house orientation for a given location
+ * by analyzing sun paths throughout the year
+ * @param {number} lat - Latitude
+ * @param {number} lng - Longitude
+ * @returns {number} Optimal orientation in degrees (clockwise from north)
+ */
+export function calculateOptimalHouseOrientation(lat, lng) {
+  // Sample key dates through the year: solstices, equinoxes, and midpoints
+  const sampleDates = [
+    new Date(new Date().getFullYear(), 0, 21),  // Winter solstice (Northern hemisphere)
+    new Date(new Date().getFullYear(), 2, 21),  // Spring equinox
+    new Date(new Date().getFullYear(), 4, 21),  // Midpoint Spring-Summer
+    new Date(new Date().getFullYear(), 6, 21),  // Summer solstice (Northern hemisphere)
+    new Date(new Date().getFullYear(), 8, 21),  // Fall equinox
+    new Date(new Date().getFullYear(), 10, 21), // Midpoint Fall-Winter
+  ];
+  
+  // Determine if we're in Northern or Southern hemisphere
+  const isNorthernHemisphere = lat > 0;
+  
+  // Base orientation to use as fallback if calculations fail
+  const baseOrientation = isNorthernHemisphere ? 180 : 0;
+  
+  // For mid-latitudes, analyze sun paths on sample dates
+  let totalWeight = 0;
+  let weightedSum = 0;
+  
+  // Analyze peak sun hours for each sample date
+  for (const date of sampleDates) {
+    // Different weights for different seasons
+    const isSummer = (date.getMonth() >= 4 && date.getMonth() <= 8);
+    let seasonWeight;
+    
+    if (isNorthernHemisphere) {
+      // In northern hemisphere, winter sun is more valuable (harder to get)
+      seasonWeight = isSummer ? 0.7 : 1.3;
+    } else {
+      // In southern hemisphere, seasons are reversed
+      seasonWeight = isSummer ? 1.3 : 0.7;
+    }
+    
+    // Sample times throughout the day (expanded to include more hours)
+    const hours = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+    
+    for (const hour of hours) {
+      // Create datetime for the calculation
+      const dateTime = new Date(date);
+      dateTime.setHours(hour, 0, 0, 0);
+      
+      // Get sun position at this time
+      const position = getSunPosition(dateTime, lat, lng);
+      
+      // Only consider when sun is reasonably above horizon
+      if (position.altitude > 0.1) { // ~6 degrees
+        // Weight by altitude - higher sun has more energy
+        const altitudeWeight = Math.sin(position.altitude);
+        
+        // Weight by time of day - mid-day gets higher weight but we still value morning hours
+        const timeWeight = 1 - Math.abs(hour - 12) / 8;
+        
+        // Calculate total sample weight
+        const weight = seasonWeight * altitudeWeight * timeWeight;
+        
+        // Get azimuth in degrees (0-360) instead of radians
+        let azimuthDegrees = (position.azimuth * 180 / Math.PI) % 360;
+        if (azimuthDegrees < 0) azimuthDegrees += 360;
+        
+        // For house orientation, we want to face the "day" area toward the sun
+        // So the optimal orientation is opposite to the sun azimuth
+        let orientationForThisSample = (azimuthDegrees + 180) % 360;
+        
+        // Add to weighted sum
+        weightedSum += orientationForThisSample * weight;
+        totalWeight += weight;
+      }
+    }
+  }
+  
+  // Calculate weighted average orientation
+  let optimalOrientation = totalWeight > 0 ? weightedSum / totalWeight : baseOrientation;
+  
+  // Apply small adjustment to favor morning sun slightly
+  // This avoids the harshest afternoon sun and captures more morning sun
+  // Adjust based on latitude - stronger adjustment near equator, less near poles
+  const absLat = Math.abs(lat);
+  // Scale from 15 degrees at equator to 5 degrees near poles
+  const morningAdjustment = 15 - (absLat / 90) * 10;
+  
+  if (isNorthernHemisphere) {
+    // In Northern hemisphere, subtract to rotate eastward
+    optimalOrientation -= morningAdjustment;
+  } else {
+    // In Southern hemisphere, add to rotate eastward
+    optimalOrientation += morningAdjustment;
+  }
+  
+  // Ensure orientation is between 0-360
+  optimalOrientation = (optimalOrientation + 360) % 360;
+  
+  return optimalOrientation;
 } 

@@ -27,7 +27,7 @@ const props = defineProps({
 });
 
 // Emits
-const emit = defineEmits(['update:coordinates', 'update:showHouse']);
+const emit = defineEmits(['update:coordinates', 'update:showHouse', 'update-house-orientation']);
 
 // Map references
 const mapContainer = ref(null);
@@ -82,6 +82,18 @@ const sunTrajectory = computed(() => {
   
   return result;
 });
+
+// Add a section for orientation info near other computed properties
+const houseOrientation = ref({
+  angle: 0,
+  label: '0° (N)'
+});
+
+// Handle orientation updates from HouseLayout
+function handleOrientationChange(orientation) {
+  houseOrientation.value = orientation;
+  emit('update-house-orientation', orientation);
+}
 
 // Initialize map
 onMounted(() => {
@@ -395,8 +407,11 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
     <!-- Add the house layout overlay centered on the map -->
     <div v-if="houseVisible" class="house-layout-overlay">
       <HouseLayout 
-        :sunPosition="sunPosition" 
+        :sun-position="sunPosition"
+        :location="props.coordinates"
+        :auto-orient="true"
         :size="HOUSE_SIZE"
+        @orientation-changed="handleOrientationChange"
       />
     </div>
   </div>

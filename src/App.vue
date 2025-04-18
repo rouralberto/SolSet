@@ -11,6 +11,7 @@ const date = ref(new Date());
 const time = ref(new Date());
 const loading = ref(false);
 const showHouse = ref(true); // Add state for house visibility
+const houseOrientation = ref({ angle: 0, label: '0° (N)' }); // Store house orientation
 
 // Set default date to today and attempt to get user location
 onMounted(() => {
@@ -74,6 +75,11 @@ const setLoading = (isLoading) => {
 const toggleHouse = () => {
   showHouse.value = !showHouse.value;
 };
+
+// Update house orientation from SunMap
+const updateHouseOrientation = (orientation) => {
+  houseOrientation.value = orientation;
+};
 </script>
 
 <template>
@@ -128,6 +134,7 @@ const toggleHouse = () => {
             :coordinates="coordinates" 
             :date="date"
             :time="time"
+            :house-orientation="houseOrientation"
           />
         </div>
       </aside>
@@ -145,6 +152,7 @@ const toggleHouse = () => {
           :date="date"
           :time="time"
           v-model:showHouse="showHouse"
+          @update-house-orientation="updateHouseOrientation"
         />
       </div>
     </div>
