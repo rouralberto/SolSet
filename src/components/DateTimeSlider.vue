@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { dateToDayOfYear, dayOfYearToDate } from '../lib/sunCalc';
 import { getSunTimes } from '../lib/sunCalc';
 
@@ -95,40 +95,35 @@ const seasonGradientStyle = computed(() => {
   };
   
   // Determine colors based on hemisphere
-  if (isNorthernHemisphere) {
-    // Fix for Northern Hemisphere: Handle the winter transition across new year
-    // Winter starts at winter solstice (Dec 21) and goes until spring equinox (Mar 20)
-    return {
-      background: `linear-gradient(to right, 
-        #80a9e0 0%,                           /* Winter (start of year) */
-        #80a9e0 ${getPercent(springEquinox)},    /* End of winter */
-        #a3d9a5 ${getPercent(springEquinox)},    /* Spring begins */
-        #a3d9a5 ${getPercent(summerSolstice)},   /* End of spring */
-        #ffdb58 ${getPercent(summerSolstice)},   /* Summer begins */
-        #ffdb58 ${getPercent(fallEquinox)},      /* End of summer */
-        #d2691e ${getPercent(fallEquinox)},      /* Fall begins */
-        #d2691e ${getPercent(winterSolstice)},   /* End of fall */
-        #80a9e0 ${getPercent(winterSolstice)},   /* Winter begins */
-        #80a9e0 100%                          /* Winter (end of year) */
-      )`
-    };
-  } else {
-    // Southern Hemisphere: Seasons are reversed
-    return {
-      background: `linear-gradient(to right, 
-        #ffdb58 0%,                           /* Summer (Jan) */
-        #ffdb58 ${getPercent(springEquinox)},    /* End of summer */
-        #d2691e ${getPercent(springEquinox)},    /* Fall begins */
-        #d2691e ${getPercent(summerSolstice)},   /* End of fall */
-        #80a9e0 ${getPercent(summerSolstice)},   /* Winter begins */
-        #80a9e0 ${getPercent(fallEquinox)},      /* End of winter */
-        #a3d9a5 ${getPercent(fallEquinox)},      /* Spring begins */
-        #a3d9a5 ${getPercent(winterSolstice)},   /* End of spring */
-        #ffdb58 ${getPercent(winterSolstice)},   /* Summer begins */
-        #ffdb58 100%                          /* Summer (end of year) */
-      )`
-    };
-  }
+  const gradientValue = isNorthernHemisphere ? 
+    `linear-gradient(to right, 
+      #80a9e0 0%,                           /* Winter (start of year) */
+      #80a9e0 ${getPercent(springEquinox)},    /* End of winter */
+      #a3d9a5 ${getPercent(springEquinox)},    /* Spring begins */
+      #a3d9a5 ${getPercent(summerSolstice)},   /* End of spring */
+      #ffdb58 ${getPercent(summerSolstice)},   /* Summer begins */
+      #ffdb58 ${getPercent(fallEquinox)},      /* End of summer */
+      #d2691e ${getPercent(fallEquinox)},      /* Fall begins */
+      #d2691e ${getPercent(winterSolstice)},   /* End of fall */
+      #80a9e0 ${getPercent(winterSolstice)},   /* Winter begins */
+      #80a9e0 100%                          /* Winter (end of year) */
+    )` :
+    `linear-gradient(to right, 
+      #ffdb58 0%,                           /* Summer (Jan) */
+      #ffdb58 ${getPercent(springEquinox)},    /* End of summer */
+      #d2691e ${getPercent(springEquinox)},    /* Fall begins */
+      #d2691e ${getPercent(summerSolstice)},   /* End of fall */
+      #80a9e0 ${getPercent(summerSolstice)},   /* Winter begins */
+      #80a9e0 ${getPercent(fallEquinox)},      /* End of winter */
+      #a3d9a5 ${getPercent(fallEquinox)},      /* Spring begins */
+      #a3d9a5 ${getPercent(winterSolstice)},   /* End of spring */
+      #ffdb58 ${getPercent(winterSolstice)},   /* Summer begins */
+      #ffdb58 100%                          /* Summer (end of year) */
+    )`;
+    
+  return {
+    '--season-gradient': gradientValue
+  };
 });
 
 // Dynamic gradient style based on sun times
@@ -138,7 +133,7 @@ const timeGradientStyle = computed(() => {
   // Default to a gray color if sun times aren't available
   if (!times.sunrise || !times.sunset) {
     return {
-      background: '#e0e0e0'  // Simple gray color
+      '--time-gradient': '#e0e0e0'  // Simple gray color
     };
   }
   
@@ -148,20 +143,22 @@ const timeGradientStyle = computed(() => {
   };
   
   // Create dynamic gradient with actual sun times
+  const gradientValue = `linear-gradient(to right, 
+    #0a1a40 0%,                           /* Night (midnight) */
+    #0a1a40 ${getPercent(times.dawn || 360)},       /* Night end */
+    #7986cb ${getPercent(times.dawn || 360)},       /* Dawn twilight starts */
+    #ffb74d ${getPercent(times.sunrise || 400)},    /* Sunrise */
+    #90caf9 ${getPercent(times.sunriseEnd || 420)}, /* Morning */
+    #64b5f6 ${getPercent(times.solarNoon || 720)},  /* Midday */
+    #90caf9 ${getPercent(times.sunsetStart || 1020)}, /* Afternoon */
+    #ffb74d ${getPercent(times.sunset || 1040)},      /* Sunset */
+    #7986cb ${getPercent(times.dusk || 1080)},        /* Dusk twilight */
+    #0a1a40 ${getPercent(times.night || 1140)},       /* Night begins */
+    #0a1a40 100%                           /* Night (end of day) */
+  )`;
+  
   return {
-    background: `linear-gradient(to right, 
-      #0a1a40 0%,                           /* Night (midnight) */
-      #0a1a40 ${getPercent(times.dawn || 360)},       /* Night end */
-      #7986cb ${getPercent(times.dawn || 360)},       /* Dawn twilight starts */
-      #ffb74d ${getPercent(times.sunrise || 400)},    /* Sunrise */
-      #90caf9 ${getPercent(times.sunriseEnd || 420)}, /* Morning */
-      #64b5f6 ${getPercent(times.solarNoon || 720)},  /* Midday */
-      #90caf9 ${getPercent(times.sunsetStart || 1020)}, /* Afternoon */
-      #ffb74d ${getPercent(times.sunset || 1040)},      /* Sunset */
-      #7986cb ${getPercent(times.dusk || 1080)},        /* Dusk twilight */
-      #0a1a40 ${getPercent(times.night || 1140)},       /* Night begins */
-      #0a1a40 100%                           /* Night (end of day) */
-    )`
+    '--time-gradient': gradientValue
   };
 });
 
@@ -258,6 +255,17 @@ function setNow() {
   // Emit time update
   emit('update-time', now);
 }
+
+// Initialize Bootstrap tooltips
+onMounted(() => {
+  // If Bootstrap's Tooltip feature is available, initialize the tooltips
+  if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+      return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+  }
+});
 </script>
 
 <template>
@@ -280,14 +288,14 @@ function setNow() {
         <span class="badge bg-light text-dark">{{ formatDate(dayOfYear) }}</span>
       </div>
       <div class="position-relative">
-        <div class="season-gradient mb-1" :style="seasonGradientStyle"></div>
         <input
           type="range"
-          class="form-range"
+          class="form-range season-slider"
           :min="1"
           :max="maxDay"
           v-model="dayOfYear"
           @input="handleDateSliderChange"
+          :style="seasonGradientStyle"
         />
       </div>
       
@@ -297,15 +305,15 @@ function setNow() {
         <span class="badge bg-light text-dark">{{ formatTime(totalMinutes) }}</span>
       </div>
       <div class="position-relative">
-        <div class="time-gradient mb-1" :style="timeGradientStyle"></div>
         <input
           type="range"
-          class="form-range"
+          class="form-range time-slider"
           min="0"
           max="1439"
           step="15"
           v-model="totalMinutes"
           @input="handleTimeSliderChange"
+          :style="timeGradientStyle"
         />
       </div>
     </div>
@@ -313,17 +321,78 @@ function setNow() {
 </template>
 
 <style scoped>
+/* Base styling for range inputs */
+.form-range {
+  -webkit-appearance: none;
+  width: 100%;
+  background: transparent;
+}
+
 /* Styling for time slider */
-.time-gradient {
+.time-slider::-webkit-slider-runnable-track {
+  -webkit-appearance: none;
+  height: 8px;
+  border-radius: 4px;
+  width: 100%;
+}
+
+.time-slider::-moz-range-track {
   height: 8px;
   border-radius: 4px;
   width: 100%;
 }
 
 /* Styling for season slider */
-.season-gradient {
+.season-slider::-webkit-slider-runnable-track {
+  -webkit-appearance: none;
   height: 8px;
   border-radius: 4px;
   width: 100%;
+}
+
+.season-slider::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+  width: 100%;
+}
+
+/* Add some styling for the thumbs to make them more visible */
+.form-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  margin-top: -4px; /* offset for proper centering */
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.form-range::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.2);
+  border: none;
+}
+</style>
+
+<style>
+.season-slider::-webkit-slider-runnable-track {
+  background: var(--season-gradient) !important;
+}
+
+.season-slider::-moz-range-track {
+  background: var(--season-gradient) !important;
+}
+
+.time-slider::-webkit-slider-runnable-track {
+  background: var(--time-gradient) !important;
+}
+
+.time-slider::-moz-range-track {
+  background: var(--time-gradient) !important;
 }
 </style> 

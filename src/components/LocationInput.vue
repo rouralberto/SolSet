@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import { geocodeAddress } from '../lib/mapUtils';
 
 // Emit events for parent component
@@ -9,11 +9,32 @@ const emit = defineEmits(['update-coordinates', 'loading']);
 const addressInput = ref('');
 const error = ref('');
 const isSearching = ref(false);
+const toastContainer = ref(null);
+
+// Toast-related refs and functions
+const showToast = ref(false);
+const toastMessage = ref('');
+
+// Initialize toast elements
+onMounted(() => {
+  // Create bootstrap toast instance if needed
+});
+
+// Function to display toast notification
+function displayToast(message) {
+  toastMessage.value = message;
+  showToast.value = true;
+  
+  // Auto-hide after 5 seconds
+  setTimeout(() => {
+    showToast.value = false;
+  }, 5000);
+}
 
 // Handle search by address
 async function handleSearch() {
   if (!addressInput.value) {
-    error.value = 'Please enter an address or coordinates';
+    displayToast('Please enter an address or coordinates');
     return;
   }
   
@@ -48,7 +69,7 @@ async function handleSearch() {
     };
     emit('update-coordinates', coords);
   } catch (err) {
-    error.value = err.message || 'Error finding location. Please try again.';
+    displayToast(err.message || 'Error finding location. Please try again.');
   } finally {
     isSearching.value = false;
     emit('loading', false);
@@ -60,7 +81,7 @@ function handleGeolocate() {
   error.value = '';
   
   if (!navigator.geolocation) {
-    error.value = 'Geolocation is not supported by your browser';
+    displayToast('Geolocation is not supported by your browser');
     return;
   }
   
@@ -92,19 +113,21 @@ function handleGeolocate() {
     // Error
     (err) => {
       console.error('Geolocation error:', err);
+      let errorMessage = 'An unknown error occurred while getting location.';
+      
       switch (err.code) {
         case err.PERMISSION_DENIED:
-          error.value = 'Location access denied. Please enable location services.';
+          errorMessage = 'Location access denied. Please enable location services.';
           break;
         case err.POSITION_UNAVAILABLE:
-          error.value = 'Location information is unavailable.';
+          errorMessage = 'Location information is unavailable.';
           break;
         case err.TIMEOUT:
-          error.value = 'Location request timed out.';
+          errorMessage = 'Location request timed out.';
           break;
-        default:
-          error.value = 'An unknown error occurred while getting location.';
       }
+      
+      displayToast(errorMessage);
       emit('loading', false);
     },
     // Options
@@ -155,6 +178,33 @@ function handleGeolocate() {
       </div>
     </div>
     
-    <p v-if="error" class="mt-2 text-danger small">{{ error }}</p>
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+      <div 
+        class="toast align-items-center text-bg-danger border-0" 
+        role="alert" 
+        aria-live="assertive" 
+        aria-atomic="true"
+        :class="{ 'show': showToast }"
+      >
+        <div class="d-flex">
+          <div class="toast-body">
+            {{ toastMessage }}
+          </div>
+          <button 
+            type="button" 
+            class="btn-close btn-close-white me-2 m-auto" 
+            @click="showToast = false"
+            aria-label="Close"
+          ></button>
+        </div>
+      </div>
+    </div>
   </div>
-</template> 
+</template>
+
+<style scoped>
+.toast-container {
+  z-index: 1090;
+}
+</style> 

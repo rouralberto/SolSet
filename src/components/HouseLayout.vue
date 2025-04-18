@@ -333,6 +333,12 @@ function drawHouseLayout() {
     .attr('font-size', '18px')
     .attr('font-weight', 'bold')
     .attr('fill', '#333')
+    .attr('transform', () => {
+      // Rotate text 180 degrees when house orientation is between 90 and 270 degrees
+      return (optimalOrientation.value > 90 && optimalOrientation.value < 270) 
+        ? `rotate(180, ${width / 2}, ${height * 0.25})` 
+        : '';
+    })
     .text("DAY");
   
   const nightLabel = rotatedGroup.append('text')
@@ -342,6 +348,12 @@ function drawHouseLayout() {
     .attr('font-size', '18px')
     .attr('font-weight', 'bold')
     .attr('fill', '#333')
+    .attr('transform', () => {
+      // Rotate text 180 degrees when house orientation is between 90 and 270 degrees
+      return (optimalOrientation.value > 90 && optimalOrientation.value < 270) 
+        ? `rotate(180, ${width / 2}, ${height * 0.75})` 
+        : '';
+    })
     .text("NIGHT");
 }
 </script>
