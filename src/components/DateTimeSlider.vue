@@ -1,9 +1,14 @@
 <script setup>
-import { ref, watch, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
+import { dateToDayOfYear, dayOfYearToDate } from '../lib/sunCalc';
 import { getSunTimes } from '../lib/sunCalc';
 
 // Props
 const props = defineProps({
+  currentDate: {
+    type: Date,
+    default: () => new Date()
+  },
   currentTime: {
     type: Date,
     default: () => new Date()
@@ -11,15 +16,20 @@ const props = defineProps({
   coordinates: {
     type: Object,
     default: () => ({ lat: 0, lng: 0 })
-  },
-  date: {
-    type: Date,
-    default: null
   }
 });
 
 // Emit events
-const emit = defineEmits(['update-time']);
+const emit = defineEmits(['update-date', 'update-time']);
+
+// Convert current date to day of year
+const dayOfYear = ref(dateToDayOfYear(props.currentDate));
+
+// Maximum day based on leap year
+const maxDay = computed(() => {
+  const year = props.currentDate.getFullYear();
+  return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365;
+});
 
 // Calculate approximate timezone offset based on longitude
 // Each 15 degrees of longitude roughly corresponds to 1 hour time difference
@@ -33,9 +43,7 @@ const totalMinutes = ref(0);
 
 // Get sun times for the current location using the provided date
 const sunTimes = computed(() => {
-  // Use the provided date for sun calculations, but keep time intact
-  const calculationDate = props.date || props.currentTime;
-  return getSunTimes(calculationDate, props.coordinates.lat, props.coordinates.lng);
+  return getSunTimes(props.currentDate, props.coordinates.lat, props.coordinates.lng);
 });
 
 // Convert sun times to minutes since midnight in the location's timezone
@@ -67,6 +75,60 @@ const sunTimesInMinutes = computed(() => {
     dusk: getMinutesSinceMidnight(times.dusk),
     night: getMinutesSinceMidnight(times.night)
   };
+});
+
+// Seasonal gradient style based on solstices and equinoxes
+const seasonGradientStyle = computed(() => {
+  const year = props.currentDate.getFullYear();
+  const isNorthernHemisphere = props.coordinates.lat >= 0;
+  
+  // Define key dates with day of year values
+  // Values for typical non-leap year (approximation)
+  const springEquinox = dateToDayOfYear(new Date(year, 2, 20)); // March 20
+  const summerSolstice = dateToDayOfYear(new Date(year, 5, 21)); // June 21
+  const fallEquinox = dateToDayOfYear(new Date(year, 8, 22));    // September 22
+  const winterSolstice = dateToDayOfYear(new Date(year, 11, 21)); // December 21
+  
+  // Calculate percentages based on days
+  const getPercent = (day) => {
+    return ((day / maxDay.value) * 100).toFixed(1) + '%';
+  };
+  
+  // Determine colors based on hemisphere
+  if (isNorthernHemisphere) {
+    // Fix for Northern Hemisphere: Handle the winter transition across new year
+    // Winter starts at winter solstice (Dec 21) and goes until spring equinox (Mar 20)
+    return {
+      background: `linear-gradient(to right, 
+        #80a9e0 0%,                           /* Winter (start of year) */
+        #80a9e0 ${getPercent(springEquinox)},    /* End of winter */
+        #a3d9a5 ${getPercent(springEquinox)},    /* Spring begins */
+        #a3d9a5 ${getPercent(summerSolstice)},   /* End of spring */
+        #ffdb58 ${getPercent(summerSolstice)},   /* Summer begins */
+        #ffdb58 ${getPercent(fallEquinox)},      /* End of summer */
+        #d2691e ${getPercent(fallEquinox)},      /* Fall begins */
+        #d2691e ${getPercent(winterSolstice)},   /* End of fall */
+        #80a9e0 ${getPercent(winterSolstice)},   /* Winter begins */
+        #80a9e0 100%                          /* Winter (end of year) */
+      )`
+    };
+  } else {
+    // Southern Hemisphere: Seasons are reversed
+    return {
+      background: `linear-gradient(to right, 
+        #ffdb58 0%,                           /* Summer (Jan) */
+        #ffdb58 ${getPercent(springEquinox)},    /* End of summer */
+        #d2691e ${getPercent(springEquinox)},    /* Fall begins */
+        #d2691e ${getPercent(summerSolstice)},   /* End of fall */
+        #80a9e0 ${getPercent(summerSolstice)},   /* Winter begins */
+        #80a9e0 ${getPercent(fallEquinox)},      /* End of winter */
+        #a3d9a5 ${getPercent(fallEquinox)},      /* Spring begins */
+        #a3d9a5 ${getPercent(winterSolstice)},   /* End of spring */
+        #ffdb58 ${getPercent(winterSolstice)},   /* Summer begins */
+        #ffdb58 100%                          /* Summer (end of year) */
+      )`
+    };
+  }
 });
 
 // Dynamic gradient style based on sun times
@@ -103,10 +165,10 @@ const timeGradientStyle = computed(() => {
   };
 });
 
-// Watch for date changes to update the gradient
-watch(() => props.date, () => {
-  // This empty watch handler ensures reactivity when date changes
-}, { immediate: true });
+// Watch for external date changes
+watch(() => props.currentDate, (newDate) => {
+  dayOfYear.value = dateToDayOfYear(newDate);
+}, { deep: true });
 
 // Update minutes whenever currentTime or coordinates change
 watch([() => props.currentTime, () => props.coordinates], () => {
@@ -123,6 +185,12 @@ watch([() => props.currentTime, () => props.coordinates], () => {
   totalMinutes.value = locationHours * 60 + utcMinutes;
 }, { immediate: true });
 
+// Format the date as month and day
+function formatDate(day) {
+  const date = dayOfYearToDate(day, props.currentDate.getFullYear());
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 // Format time as HH:MM
 function formatTime(minutes) {
   const hours = Math.floor(minutes / 60);
@@ -131,8 +199,16 @@ function formatTime(minutes) {
   return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
 }
 
-// Handle slider change
-function handleSliderChange(event) {
+// Handle date slider change
+function handleDateSliderChange(event) {
+  const day = parseInt(event.target.value);
+  const newDate = dayOfYearToDate(day, props.currentDate.getFullYear());
+  dayOfYear.value = day;
+  emit('update-date', newDate);
+}
+
+// Handle time slider change
+function handleTimeSliderChange(event) {
   const minutes = parseInt(event.target.value);
   totalMinutes.value = minutes;
   
@@ -159,10 +235,16 @@ function handleSliderChange(event) {
   emit('update-time', newTime);
 }
 
-// Set time to current time at the specified location
-function setNowTime() {
-  // Get current UTC time
+// Set both date and time to current
+function setNow() {
   const now = new Date();
+  
+  // Update date
+  const day = dateToDayOfYear(now);
+  dayOfYear.value = day;
+  emit('update-date', now);
+  
+  // Update time
   const utcHours = now.getUTCHours();
   const utcMinutes = now.getUTCMinutes();
   
@@ -173,42 +255,47 @@ function setNowTime() {
   // Set total minutes for the slider
   totalMinutes.value = locationHours * 60 + utcMinutes;
   
-  // Create a date object with the correct time
-  const utcDate = new Date();
-  utcDate.setUTCHours(utcHours, utcMinutes, 0, 0);
-  
-  // Convert to local time
-  const newTime = new Date(utcDate);
-  
-  emit('update-time', newTime);
+  // Emit time update
+  emit('update-time', now);
 }
-
-// Key times for markers
-const keyTimes = [
-  { minutes: 0, label: '00:00' },     // Midnight
-  { minutes: 360, label: '06:00' },   // 6 AM
-  { minutes: 720, label: '12:00' },   // Noon
-  { minutes: 1080, label: '18:00' },  // 6 PM
-  { minutes: 1439, label: '23:59' }   // End of day
-];
 </script>
 
 <template>
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0">Time</h5>
-      <div class="d-flex align-items-center gap-2">
-        <div class="text-muted small">{{ formatTime(totalMinutes) }}</div>
-        <button 
-          @click="setNowTime" 
-          class="btn btn-primary btn-sm"
-        >
-          Now
-        </button>
-      </div>
+      <h5 class="mb-0">Date & Time</h5>
+      <button 
+        @click="setNow" 
+        class="btn btn-primary btn-sm d-flex align-items-center gap-2"
+      >
+        <i class="bi bi-clock"></i>
+        Current Time
+      </button>
     </div>
     
     <div class="card-body">
+      <!-- Date section -->
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted">Date</span>
+        <span class="badge bg-light text-dark">{{ formatDate(dayOfYear) }}</span>
+      </div>
+      <div class="position-relative">
+        <div class="season-gradient mb-1" :style="seasonGradientStyle"></div>
+        <input
+          type="range"
+          class="form-range"
+          :min="1"
+          :max="maxDay"
+          v-model="dayOfYear"
+          @input="handleDateSliderChange"
+        />
+      </div>
+      
+      <!-- Time section -->
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted">Time</span>
+        <span class="badge bg-light text-dark">{{ formatTime(totalMinutes) }}</span>
+      </div>
       <div class="position-relative">
         <div class="time-gradient mb-1" :style="timeGradientStyle"></div>
         <input
@@ -218,7 +305,7 @@ const keyTimes = [
           max="1439"
           step="15"
           v-model="totalMinutes"
-          @input="handleSliderChange"
+          @input="handleTimeSliderChange"
         />
       </div>
     </div>
@@ -233,5 +320,10 @@ const keyTimes = [
   width: 100%;
 }
 
-/* Custom styling for slider if needed */
-</style>
+/* Styling for season slider */
+.season-gradient {
+  height: 8px;
+  border-radius: 4px;
+  width: 100%;
+}
+</style> 

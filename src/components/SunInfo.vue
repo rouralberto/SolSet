@@ -147,16 +147,6 @@ const azimuthDirection = computed(() => {
         </span>
       </div>
       
-      <!-- House Orientation -->
-      <hr class="my-3">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <span class="text-muted">House Orientation:</span>
-        <span class="fw-medium ms-2">{{ houseOrientation.label }}</span>
-      </div>
-      <div class="small text-muted mb-2">
-        Optimized for best solar exposure throughout the year
-      </div>
-      
       <!-- Status -->
       <div class="mt-3 py-1 px-2 rounded text-center small" 
         :class="isSunUp ? 'bg-warning-subtle text-warning-emphasis' : 'bg-info-subtle text-info-emphasis'">

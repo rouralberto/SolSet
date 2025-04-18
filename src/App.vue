@@ -2,8 +2,7 @@
 import { ref, onMounted } from 'vue';
 import SunMap from './components/SunMap.vue';
 import LocationInput from './components/LocationInput.vue';
-import DaySlider from './components/DaySlider.vue';
-import TimeSlider from './components/TimeSlider.vue';
+import DateTimeSlider from './components/DateTimeSlider.vue';
 import SunInfo from './components/SunInfo.vue';
 
 const coordinates = ref({ lat: 43.3183, lng: -1.9812 }); // Donostia - San Sebastián coordinates
@@ -103,27 +102,13 @@ const updateHouseOrientation = (orientation) => {
       <!-- Fixed sidebar with controls -->
       <aside class="sidebar bg-white shadow border-end" style="width: 320px; overflow-y: auto; z-index: 5;">
         <div class="p-3 pt-0 d-flex flex-column gap-4">
-          <DaySlider 
-            :current-date="date" 
-            @update-date="updateDate" 
-          />
-          <TimeSlider 
-            :current-time="time" 
+          <DateTimeSlider 
+            :current-date="date"
+            :current-time="time"
             :coordinates="coordinates"
-            :date="date"
-            @update-time="updateTime" 
+            @update-date="updateDate"
+            @update-time="updateTime"
           />
-          
-          <!-- Now button for both date and time -->
-          <div class="bg-white rounded border shadow-sm p-3">
-            <button 
-              @click="setNow" 
-              class="btn btn-primary w-100 d-flex align-items-center justify-content-center"
-            >
-              <i class="bi bi-clock me-2"></i>
-              Set to Current Time
-            </button>
-          </div>
           
           <!-- House Layout Toggle -->
           <div class="bg-white rounded border shadow-sm p-3">
