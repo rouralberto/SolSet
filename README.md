@@ -10,28 +10,25 @@ SolSet is an interactive web application that visualizes the sun's position and 
 - **Date Selection**: Slider to choose any day of the year
 - **Time Selection**: Slider to choose any time in 15-minute increments
 - **Sun Data Display**: View detailed information about sun position, times, and shadow length
+- **House Layout Visualization**: Visualize optimal house orientation with shadow projections
 - **Responsive Design**: Works on desktop and mobile devices
-
-## Live Demo
-
-[Visit the SolSet Sun Tracker](https://solset-sun-tracker.s3.amazonaws.com/index.html) (example link)
 
 ## Tech Stack
 
-- Vue.js 3 (Composition API)
-- Vite (Build tool)
-- Leaflet.js (Map rendering)
-- SunCalc.js (Sun calculations)
-- Bootstrap 5 (Styling)
-- Bootstrap Icons
-- D3.js (SVG manipulation)
-- Axios (HTTP client)
+- Vue.js 3.5 (Composition API)
+- Vite 6.3 (Build tool)
+- Leaflet.js 1.9.4 (Map rendering)
+- SunCalc.js 1.9.0 (Sun calculations)
+- Bootstrap 5.3.5 (Styling)
+- Bootstrap Icons 1.11.3
+- D3.js 7.9.0 (SVG manipulation for house layout)
+- Axios 1.8.4 (HTTP client)
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js (v14 or later)
+- Node.js (v16 or later)
 - npm or yarn
 
 ### Installation
