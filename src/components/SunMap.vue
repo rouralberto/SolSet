@@ -303,11 +303,28 @@ watch(() => houseVisible.value, () => {
 // Add watch for seasonal paths visibility changes
 watch(() => props.showSeasonalPaths, (isVisible) => {
   try {
-    updateSunTrajectory();
-    
-    // If turning off, make sure legend is cleared
-    if (!isVisible) {
+    // If turning on, make sure we initialize the legend SVG if needed
+    if (isVisible) {
+      // Need to wait for Vue to render the container
+      setTimeout(() => {
+        // Check if SVG needs initialization
+        if (seasonalLegendContainer.value) {
+          const existingSvg = d3.select(seasonalLegendContainer.value).select('svg');
+          if (existingSvg.empty()) {
+            // Re-initialize the SVG
+            d3.select(seasonalLegendContainer.value)
+              .append('svg')
+              .attr('width', 130)
+              .attr('height', 150)
+              .attr('class', 'seasonal-legend-svg');
+          }
+        }
+        updateSunTrajectory();
+      }, 0);
+    } else {
+      // If turning off, make sure legend is cleared
       clearSeasonalLegend();
+      updateSunTrajectory();
     }
   } catch (error) {
     console.error("Error updating sun trajectory from seasonal paths toggle:", error);
@@ -584,98 +601,114 @@ function updateSeasonalLegend() {
   
   // Get the legend SVG
   const legendSvg = d3.select(seasonalLegendContainer.value).select('svg');
-  if (!legendSvg.empty()) {
-    // Clear previous legend
-    legendSvg.selectAll('*').remove();
+  if (legendSvg.empty()) {
+    // Try to initialize it now as a fallback
+    d3.select(seasonalLegendContainer.value)
+      .append('svg')
+      .attr('width', 130)
+      .attr('height', 150)
+      .attr('class', 'seasonal-legend-svg');
     
-    const seasonal = getAndCacheSeasonalTrajectories();
-    if (!seasonal) return;
-    
-    // Count valid trajectories
-    let validTrajectoryCount = 0;
-    const validTrajectories = {};
-    
-    // Validate trajectories
-    Object.entries(seasonal).forEach(([key, trajectory]) => {
-      if (trajectory && trajectory.points && trajectory.points.length > 0) {
-        validTrajectoryCount++;
-        validTrajectories[key] = trajectory;
-      }
-    });
-    
-    // If no valid trajectories, don't render legend
-    if (validTrajectoryCount === 0) return;
-    
-    // Create a group for the legend contents
-    const legend = legendSvg.append('g')
-      .attr('class', 'legend-content')
-      .attr('transform', 'translate(5, 20)');
-    
-    // Add legend title
-    legend.append('text')
-      .attr('x', 5)
-      .attr('y', -5)
-      .attr('font-size', '12px')
-      .attr('font-weight', 'bold')
-      .attr('fill', 'white')
-      .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
-      .text('Sun Paths');
-    
-    // Add Today's Path first (solid line)
+    // Try to select it again
+    const retryLegendSvg = d3.select(seasonalLegendContainer.value).select('svg');
+    if (retryLegendSvg.empty()) {
+      return;
+    }
+  }
+  
+  // Now we should have a valid legendSvg
+  const svgElement = d3.select(seasonalLegendContainer.value).select('svg');
+  
+  // Clear previous legend
+  svgElement.selectAll('*').remove();
+  
+  const seasonal = getAndCacheSeasonalTrajectories();
+  if (!seasonal) return;
+  
+  // Count valid trajectories
+  let validTrajectoryCount = 0;
+  const validTrajectories = {};
+  
+  // Validate trajectories
+  Object.entries(seasonal).forEach(([key, trajectory]) => {
+    if (trajectory && trajectory.points && trajectory.points.length > 0) {
+      validTrajectoryCount++;
+      validTrajectories[key] = trajectory;
+    }
+  });
+  
+  // If no valid trajectories, don't render legend
+  if (validTrajectoryCount === 0) return;
+  
+  // Create a group for the legend contents
+  const legend = svgElement.append('g')
+    .attr('class', 'legend-content')
+    .attr('transform', 'translate(5, 20)');
+  
+  // Add legend title
+  legend.append('text')
+    .attr('x', 5)
+    .attr('y', -5)
+    .attr('font-size', '12px')
+    .attr('font-weight', 'bold')
+    .attr('fill', 'white')
+    .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
+    .text('Sun Paths');
+  
+  // Add Today's Path first (solid line)
+  legend.append('line')
+    .attr('x1', 0)
+    .attr('y1', 5)
+    .attr('x2', 20)
+    .attr('y2', 5)
+    .attr('stroke', 'orange')
+    .attr('stroke-width', 3)
+    .attr('stroke-opacity', 0.9);
+  
+  legend.append('text')
+    .attr('x', 25)
+    .attr('y', 9)
+    .attr('font-size', '11px')
+    .attr('fill', 'white')
+    .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
+    .text("Today's Path");
+  
+  // Start seasonal paths after today's path
+  let index = 1;
+  
+  // Add entries for each season
+  Object.entries(validTrajectories).forEach(([key, data]) => {
+    // Add line
     legend.append('line')
       .attr('x1', 0)
-      .attr('y1', 5)
+      .attr('y1', index * 18 + 5)
       .attr('x2', 20)
-      .attr('y2', 5)
-      .attr('stroke', 'orange')
-      .attr('stroke-width', 3)
-      .attr('stroke-opacity', 0.9);
+      .attr('y2', index * 18 + 5)
+      .attr('stroke', data.color)
+      .attr('stroke-width', 2)
+      .attr('stroke-opacity', 0.8)
+      .attr('stroke-dasharray', '5,3');
     
+    // Add label
     legend.append('text')
       .attr('x', 25)
-      .attr('y', 9)
+      .attr('y', index * 18 + 9)
       .attr('font-size', '11px')
       .attr('fill', 'white')
       .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
-      .text("Today's Path");
+      .text(data.label);
     
-    // Start seasonal paths after today's path
-    let index = 1;
-    
-    // Add entries for each season
-    Object.entries(validTrajectories).forEach(([key, data]) => {
-      // Add line
-      legend.append('line')
-        .attr('x1', 0)
-        .attr('y1', index * 18 + 5)
-        .attr('x2', 20)
-        .attr('y2', index * 18 + 5)
-        .attr('stroke', data.color)
-        .attr('stroke-width', 2)
-        .attr('stroke-opacity', 0.8)
-        .attr('stroke-dasharray', '5,3');
-      
-      // Add label
-      legend.append('text')
-        .attr('x', 25)
-        .attr('y', index * 18 + 9)
-        .attr('font-size', '11px')
-        .attr('fill', 'white')
-        .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
-        .text(data.label);
-      
-      index++;
-    });
-    
-    // Add background rectangle - adjust height to include Today's Path
-    legend.insert('rect', ':first-child')
-      .attr('x', -5)
-      .attr('y', -20)
-      .attr('width', 125)
-      .attr('height', index * 18 + 25)
-      .attr('fill', 'rgba(0, 0, 0, 0.6)')
-      .attr('rx', 5);
-  }
+    index++;
+  });
+  
+  // Add background rectangle - adjust height to include Today's Path
+  legend.insert('rect', ':first-child')
+    .attr('x', -5)
+    .attr('y', -20)
+    .attr('width', 125)
+    .attr('height', index * 18 + 25)
+    .attr('fill', 'rgba(0, 0, 0, 0.6)')
+    .attr('rx', 5);
 }
 
 // Function to clear the seasonal legend
@@ -777,6 +810,8 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   right: 20px;
   z-index: 20;
   pointer-events: none;
+  min-width: 130px;
+  min-height: 30px;
 }
 
 .house-layout-overlay {

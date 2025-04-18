@@ -91,10 +91,20 @@ const updateHouseOrientation = (orientation) => {
   <main class="vh-100 d-flex flex-column bg-light">
     <!-- Header with location input -->
     <header class="p-3 bg-white shadow">
-      <LocationInput 
-        @update-coordinates="updateCoordinates" 
-        @loading="setLoading" 
-      />
+      <div class="d-flex align-items-center">
+        <div style="width: 304px;" class="d-flex align-items-center">
+          <h1 class="h4 mb-0">
+            <i class="bi bi-sun me-1"></i>
+            SolSet
+          </h1>
+        </div>
+        <div class="flex-grow-1">
+          <LocationInput 
+            @update-coordinates="updateCoordinates" 
+            @loading="setLoading" 
+          />
+        </div>
+      </div>
     </header>
 
     <!-- Main content area with fixed sidebar and map -->
@@ -120,8 +130,8 @@ const updateHouseOrientation = (orientation) => {
               {{ showHouse ? 'Hide House Layout' : 'Show House Layout' }}
             </button>
             
-            <!-- House orientation info - only show when house is visible -->
-            <div v-if="showHouse" class="mt-2 text-center text-muted small">
+            <!-- House orientation info -->
+            <div class="mt-2 text-center text-muted small">
               <i class="bi bi-compass me-1"></i>
               Optimal orientation: {{ houseOrientation.label }}
             </div>

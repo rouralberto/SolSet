@@ -50,12 +50,10 @@ export function initMap(elementId, coords, zoom = 13) {
   // Create basemap groups
   const baseLayers = {
     // Local language options
-    "Street Map (Local Labels)": openStreetMapLocal,
-    "Satellite (No Labels)": esriWorldImagery,
-    
-    // English options
-    "Street Map (English Labels)": esriWorldStreet,
-    "Satellite (English Labels)": esriWorldImageryLabeled
+    "OSM Map (Local Labels)": openStreetMapLocal,
+    "ESRI Map (English Labels)": esriWorldStreet,
+    "ESRI Satellite (English Labels)": esriWorldImageryLabeled,
+    "ESRI Satellite (No Labels)": esriWorldImagery,
   };
   
   // Add layer control
