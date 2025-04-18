@@ -128,6 +128,12 @@ const updateHouseOrientation = (orientation) => {
               <i class="bi bi-house me-2"></i>
               {{ showHouse ? 'Hide House Layout' : 'Show House Layout' }}
             </button>
+            
+            <!-- House orientation info - only show when house is visible -->
+            <div v-if="showHouse" class="mt-2 text-center text-muted small">
+              <i class="bi bi-compass me-1"></i>
+              Optimal orientation: {{ houseOrientation.label }}
+            </div>
           </div>
           
           <SunInfo 

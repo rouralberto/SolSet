@@ -343,18 +343,6 @@ function drawHouseLayout() {
     .attr('font-weight', 'bold')
     .attr('fill', '#333')
     .text("NIGHT");
-  
-  // Add orientation info
-  if (props.autoOrient) {
-    // Add orientation info text
-    house.append('text')
-      .attr('x', width - 10)
-      .attr('y', height + 20)
-      .attr('text-anchor', 'end')
-      .attr('font-size', '16px')
-      .attr('fill', '#333')
-      .text(`Optimal orientation: ${orientationLabel.value}`);
-  }
 }
 </script>
 

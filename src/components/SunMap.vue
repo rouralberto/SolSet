@@ -343,7 +343,7 @@ function updateSunTrajectory() {
       .append('circle')
       .attr('cx', sunPoint.x)
       .attr('cy', sunPoint.y)
-      .attr('r', 8)
+      .attr('r', 12)
       .attr('fill', 'yellow')
       .attr('stroke', 'white')
       .attr('stroke-width', 2)
@@ -385,7 +385,7 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
     const horizonDist = OVERLAY_RADIUS * 1.5;
     const dx = horizonDist * Math.sin(azimuth);
     const dy = horizonDist * Math.cos(azimuth);
-    return { x: center.x + dx, y: center.y - dy - 50 }; // Move trajectory up by 50px
+    return { x: center.x + dx, y: center.y - dy };
   }
   
   // Scale distance by altitude (higher altitude = closer to center)
@@ -402,8 +402,7 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   const dy = distance * Math.cos(azimuth);
   
   // In SVG, y-axis is flipped (goes down), so we negate dy
-  // Move trajectory up by 50px to make room for the house
-  return { x: center.x + dx, y: center.y - dy - 50 };
+  return { x: center.x + dx, y: center.y - dy };
 }
 </script>
 
@@ -448,7 +447,7 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 10;
+  z-index: 15;
   pointer-events: none;
   background-color: rgba(255, 255, 255, 0.2);
   border-radius: 50%;
@@ -461,7 +460,7 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 15;
+  z-index: 10;
   border-radius: 5px;
   padding: 0;
   overflow: visible; /* Allow shadows to extend beyond container */
