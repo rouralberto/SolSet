@@ -277,13 +277,13 @@ onMounted(() => {
         class="btn btn-primary btn-sm d-flex align-items-center gap-2"
       >
         <i class="bi bi-clock"></i>
-        Current Time
+        Now
       </button>
     </div>
     
     <div class="card-body">
       <!-- Date section -->
-      <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="d-flex justify-content-between align-items-center">
         <span class="text-muted">Date</span>
         <span class="badge bg-light text-dark">{{ formatDate(dayOfYear) }}</span>
       </div>
@@ -300,7 +300,7 @@ onMounted(() => {
       </div>
       
       <!-- Time section -->
-      <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="d-flex justify-content-between align-items-center">
         <span class="text-muted">Time</span>
         <span class="badge bg-light text-dark">{{ formatTime(totalMinutes) }}</span>
       </div>
@@ -310,7 +310,7 @@ onMounted(() => {
           class="form-range time-slider"
           min="0"
           max="1439"
-          step="15"
+          step="5"
           v-model="totalMinutes"
           @input="handleTimeSliderChange"
           :style="timeGradientStyle"
