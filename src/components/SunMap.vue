@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { initMap } from '../lib/mapUtils';
-import { getSunPosition, getSunTrajectory } from '../lib/sunCalc';
+import { getSunPosition, getSunTrajectory, getSeasonalTrajectories } from '../lib/sunCalc';
 import HouseLayout from './HouseLayout.vue';
 import 'leaflet/dist/leaflet.css';
 import * as d3 from 'd3';
@@ -23,6 +23,10 @@ const props = defineProps({
   showHouse: {
     type: Boolean,
     default: true
+  },
+  showSeasonalPaths: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -34,6 +38,7 @@ const mapContainer = ref(null);
 const mapInstance = ref(null);
 const sunOverlayContainer = ref(null);
 const sunOverlaySvg = ref(null);
+const seasonalLegendContainer = ref(null);
 const houseVisible = computed(() => props.showHouse);
 const lastCoordinates = ref({ lat: 0, lng: 0 });
 
@@ -83,6 +88,9 @@ const sunTrajectory = computed(() => {
   return result;
 });
 
+// Seasonal trajectories cached to avoid recalculation
+const seasonalTrajectories = ref(null);
+
 // Add a section for orientation info near other computed properties
 const houseOrientation = ref({
   angle: 0,
@@ -94,6 +102,10 @@ function handleOrientationChange(orientation) {
   houseOrientation.value = orientation;
   emit('update-house-orientation', orientation);
 }
+
+// Add state for throttling map updates
+const lastUpdateTime = ref(0);
+const updateThrottleMs = 100; // Throttle to max 10 updates per second
 
 // Initialize map
 onMounted(() => {
@@ -120,6 +132,9 @@ onMounted(() => {
   // Initialize the sun overlay
   initSunOverlay();
   
+  // Initialize the seasonal legend
+  initSeasonalLegend();
+  
   // Save initial coordinates
   lastCoordinates.value = { ...props.coordinates };
   
@@ -144,6 +159,18 @@ function initSunOverlay() {
   
   sunOverlaySvg.value.append('g')
     .attr('class', 'sun-marker');
+}
+
+// Initialize the seasonal legend in the bottom right corner
+function initSeasonalLegend() {
+  if (!seasonalLegendContainer.value) return;
+  
+  // Create the SVG element for the legend
+  d3.select(seasonalLegendContainer.value)
+    .append('svg')
+    .attr('width', 130)
+    .attr('height', 150) // Increased height to accommodate the additional entry
+    .attr('class', 'seasonal-legend-svg');
 }
 
 // Handle map click
@@ -178,14 +205,24 @@ function handleMapMove(e) {
   emit('update:coordinates', newCoordinates);
   
   // Only update lastCoordinates (and potentially trigger expensive operations)
-  // if the change is significant
+  // if the change is significant and we're not updating too frequently
   const isDifferentLocation = 
     Math.abs(newCoordinates.lat - lastCoordinates.value.lat) > 0.0001 || 
     Math.abs(newCoordinates.lng - lastCoordinates.value.lng) > 0.0001;
   
-  if (isDifferentLocation) {
+  const now = Date.now();
+  const timeSinceLastUpdate = now - lastUpdateTime.value;
+  
+  if (isDifferentLocation && (timeSinceLastUpdate > updateThrottleMs || timeSinceLastUpdate > 1000)) {
     // Save last coordinates
     lastCoordinates.value = { ...newCoordinates };
+    lastUpdateTime.value = now;
+    
+    // Clear seasonal trajectories cache to force recalculation
+    if (props.showSeasonalPaths) {
+      seasonalTrajectories.value = null;
+      updateSunTrajectory();
+    }
   }
 }
 
@@ -202,6 +239,14 @@ onUnmounted(() => {
   // Clean up SVG if needed
   if (sunOverlaySvg.value) {
     sunOverlaySvg.value.remove();
+  }
+  
+  // Clean up seasonal legend
+  if (seasonalLegendContainer.value) {
+    const legendSvg = d3.select(seasonalLegendContainer.value).select('svg');
+    if (!legendSvg.empty()) {
+      legendSvg.remove();
+    }
   }
 });
 
@@ -228,152 +273,418 @@ watch(() => props.coordinates, (newCoords) => {
     
     // Remove the forceUpdate flag after using it
     delete lastCoordinates.value.forceUpdate;
+    
+    // Clear seasonal trajectories cache when location changes significantly
+    if (props.showSeasonalPaths) {
+      seasonalTrajectories.value = null;
+    }
   }
 }, { deep: true });
 
 // Only update trajectory visualization when any props change
 watch([() => props.coordinates, sunPosition, sunTrajectory], () => {
-  // Update sun trajectory
-  updateSunTrajectory();
+  try {
+    // Update sun trajectory
+    updateSunTrajectory();
+  } catch (error) {
+    console.error("Error updating sun trajectory from watch:", error);
+  }
 });
 
 // Add watch for house visibility changes to update shadow elements immediately
 watch(() => houseVisible.value, () => {
-  updateSunTrajectory();
+  try {
+    updateSunTrajectory();
+  } catch (error) {
+    console.error("Error updating sun trajectory from house visibility change:", error);
+  }
 });
+
+// Add watch for seasonal paths visibility changes
+watch(() => props.showSeasonalPaths, (isVisible) => {
+  try {
+    updateSunTrajectory();
+    
+    // If turning off, make sure legend is cleared
+    if (!isVisible) {
+      clearSeasonalLegend();
+    }
+  } catch (error) {
+    console.error("Error updating sun trajectory from seasonal paths toggle:", error);
+  }
+});
+
+// Function to get seasonal trajectories with caching
+function getAndCacheSeasonalTrajectories() {
+  try {
+    // Check if we have cached trajectories for the current coordinates
+    if (!seasonalTrajectories.value || 
+        Math.abs(lastCoordinates.value.lat - props.coordinates.lat) > 0.01 || 
+        Math.abs(lastCoordinates.value.lng - props.coordinates.lng) > 0.01) {
+      
+      // Use a local coords reference to avoid race conditions during calculation
+      const currentCoords = {
+        lat: props.coordinates.lat,
+        lng: props.coordinates.lng
+      };
+      
+      // Validate coordinates before calculation
+      if (isNaN(currentCoords.lat) || isNaN(currentCoords.lng)) {
+        console.error("Invalid coordinates for seasonal trajectories:", currentCoords);
+        return null;
+      }
+      
+      // Create the seasonal trajectories
+      try {
+        const trajectories = getSeasonalTrajectories(
+          currentCoords.lat,
+          currentCoords.lng,
+          new Date().getFullYear(),
+          48 // More points for smoother arcs
+        );
+        
+        // Validate trajectories before caching
+        if (!trajectories) {
+          console.warn("Seasonal trajectories calculation returned null or undefined");
+          return null;
+        }
+        
+        // Store the calculated trajectories
+        seasonalTrajectories.value = trajectories;
+        
+        // Store the coordinates used for this calculation
+        seasonalTrajectories.value.calculatedFor = {
+          lat: currentCoords.lat,
+          lng: currentCoords.lng
+        };
+      } catch (calcError) {
+        console.error("Error calculating seasonal trajectories:", calcError);
+        return null;
+      }
+    }
+    
+    return seasonalTrajectories.value;
+  } catch (error) {
+    console.error("Error in getAndCacheSeasonalTrajectories:", error);
+    return null;
+  }
+}
 
 // Function to update the sun trajectory overlay
 function updateSunTrajectory() {
   if (!sunOverlaySvg.value) return;
   
-  const svg = sunOverlaySvg.value;
-  const center = { x: OVERLAY_SIZE / 2, y: OVERLAY_SIZE / 2 };
-  
-  // Clear existing elements
-  svg.select('.trajectory-path').selectAll('*').remove();
-  svg.select('.sun-marker').selectAll('*').remove();
-  
-  // Skip if no trajectory points
-  if (!sunTrajectory.value || sunTrajectory.value.length === 0) return;  
-  
-  // Filter to only include points where the sun is above the horizon (altitude > 0)
-  const daytimePoints = sunTrajectory.value.filter(point => point.altitude > 0);
-  
-  // Skip if no daytime points
-  if (daytimePoints.length === 0) {
-    return;
+  try {
+    const svg = sunOverlaySvg.value;
+    const center = { x: OVERLAY_SIZE / 2, y: OVERLAY_SIZE / 2 };
+    
+    // Clear existing elements
+    svg.select('.trajectory-path').selectAll('*').remove();
+    svg.select('.sun-marker').selectAll('*').remove();
+    
+    // Skip if no trajectory points
+    if (!sunTrajectory.value || sunTrajectory.value.length === 0) return;  
+    
+    // Filter to only include points where the sun is above the horizon (altitude > 0)
+    const daytimePoints = sunTrajectory.value.filter(point => point.altitude > 0);
+    
+    // Skip if no daytime points
+    if (daytimePoints.length === 0) {
+      return;
+    }
+    
+    // Render seasonal trajectories if enabled
+    if (props.showSeasonalPaths) {
+      try {
+        renderSeasonalTrajectories(svg, center);
+        updateSeasonalLegend();
+      } catch (error) {
+        console.error("Error rendering seasonal trajectories:", error);
+        // Continue with regular trajectory even if seasonal fails
+      }
+    } else {
+      // Clear legend when not showing seasonal paths
+      clearSeasonalLegend();
+    }
+    
+    // Convert trajectory points to overlay coordinates
+    const pathPoints = daytimePoints.map(point => {
+      return sunPositionToOverlayPoint(point.azimuth, point.altitude, center);
+    });
+    
+    // Create path line
+    const lineFunction = d3.line()
+      .x(d => d.x)
+      .y(d => d.y)
+      .curve(d3.curveBasis);
+    
+    svg.select('.trajectory-path')
+      .append('path')
+      .attr('d', lineFunction(pathPoints))
+      .attr('stroke', 'orange')
+      .attr('stroke-width', 3)
+      .attr('fill', 'none')
+      .attr('stroke-opacity', 0.7)
+      .attr('class', 'trajectory-path');
+    
+    // Get times from the trajectory
+    if (daytimePoints.length > 0) {
+      // Sort the points by time to ensure correct ordering
+      const sortedPoints = [...daytimePoints].sort((a, b) => a.time - b.time);
+      
+      // First point is sunrise (east)
+      const sunrisePoint = sortedPoints[0];
+      // Last point is sunset (west)
+      const sunsetPoint = sortedPoints[sortedPoints.length - 1];
+      
+      // Add sunrise marker (east)
+      if (sunrisePoint) {
+        const sunriseOverlayPoint = sunPositionToOverlayPoint(
+          sunrisePoint.azimuth, 
+          sunrisePoint.altitude, 
+          center
+        );
+        
+        svg.select('.trajectory-path')
+          .append('circle')
+          .attr('cx', sunriseOverlayPoint.x)
+          .attr('cy', sunriseOverlayPoint.y)
+          .attr('r', 6)
+          .attr('fill', 'red')
+          .attr('stroke', 'white')
+          .attr('stroke-width', 2);
+      }
+      
+      // Add sunset marker (west)
+      if (sunsetPoint) {
+        const sunsetOverlayPoint = sunPositionToOverlayPoint(
+          sunsetPoint.azimuth, 
+          sunsetPoint.altitude, 
+          center
+        );
+        
+        svg.select('.trajectory-path')
+          .append('circle')
+          .attr('cx', sunsetOverlayPoint.x)
+          .attr('cy', sunsetOverlayPoint.y)
+          .attr('r', 6)
+          .attr('fill', 'blue')
+          .attr('stroke', 'white')
+          .attr('stroke-width', 2);
+      }
+    }
+    
+    // Add current sun position marker (if above horizon)
+    if (sunPosition.value && sunPosition.value.altitude > 0) {
+      const sunPoint = sunPositionToOverlayPoint(
+        sunPosition.value.azimuth, 
+        sunPosition.value.altitude, 
+        center
+      );
+      
+      svg.select('.sun-marker')
+        .append('circle')
+        .attr('cx', sunPoint.x)
+        .attr('cy', sunPoint.y)
+        .attr('r', 12)
+        .attr('fill', 'yellow')
+        .attr('stroke', 'white')
+        .attr('stroke-width', 2)
+        .attr('filter', 'drop-shadow(0 0 6px rgba(255, 255, 0, 0.7))');
+        
+      // Add shadow line from sun to center (representing shadow at the selected location)
+      // Only show if house is not visible
+      if (!houseVisible.value) {
+        svg.select('.sun-marker')
+          .append('line')
+          .attr('x1', sunPoint.x)
+          .attr('y1', sunPoint.y)
+          .attr('x2', center.x)
+          .attr('y2', center.y)
+          .attr('stroke', 'rgba(0, 0, 0, 0.4)')
+          .attr('stroke-width', 2)
+          .attr('stroke-dasharray', '4 2');
+      }
+      
+      // Add shadow indicator at center, but only if house is not visible
+      if (!houseVisible.value) {
+        svg.select('.sun-marker')
+          .append('circle')
+          .attr('cx', center.x)
+          .attr('cy', center.y)
+          .attr('r', 3)
+          .attr('fill', 'rgba(0, 0, 0, 0.5)')
+          .attr('stroke', 'white')
+          .attr('stroke-width', 1);
+      }
+    }
+  } catch (error) {
+    console.error("Error in updateSunTrajectory:", error);
   }
+}
+
+// Function to render seasonal trajectories (only paths, no legend)
+function renderSeasonalTrajectories(svg, center) {
+  const seasonal = getAndCacheSeasonalTrajectories();
+  if (!seasonal) return;
   
-  // Convert trajectory points to overlay coordinates
-  const pathPoints = daytimePoints.map(point => {
-    return sunPositionToOverlayPoint(point.azimuth, point.altitude, center);
+  // Count how many valid trajectories we have
+  let validTrajectoryCount = 0;
+  const validTrajectories = {};
+  
+  // Validate all trajectories first
+  Object.entries(seasonal).forEach(([key, trajectory]) => {
+    if (trajectory && trajectory.points && trajectory.points.length > 0) {
+      const daytimePoints = trajectory.points.filter(point => point && point.altitude > 0);
+      if (daytimePoints.length > 0) {
+        validTrajectoryCount++;
+        validTrajectories[key] = {
+          ...trajectory,
+          daytimePoints
+        };
+      }
+    }
   });
   
-  // Create path line
+  // If we have no valid trajectories, don't render anything
+  if (validTrajectoryCount === 0) return;
+  
   const lineFunction = d3.line()
     .x(d => d.x)
     .y(d => d.y)
     .curve(d3.curveBasis);
+    
+  // Create a group for seasonal paths
+  const seasonalGroup = svg.select('.trajectory-path')
+    .append('g')
+    .attr('class', 'seasonal-paths');
   
-  svg.select('.trajectory-path')
-    .append('path')
-    .attr('d', lineFunction(pathPoints))
-    .attr('stroke', 'orange')
-    .attr('stroke-width', 3)
-    .attr('fill', 'none')
-    .attr('stroke-opacity', 0.7)
-    .attr('class', 'trajectory-path');
-  
-  // Get times from the trajectory
-  if (daytimePoints.length > 0) {
-    // Sort the points by time to ensure correct ordering
-    const sortedPoints = [...daytimePoints].sort((a, b) => a.time - b.time);
+  // Process each valid seasonal trajectory
+  Object.entries(validTrajectories).forEach(([key, data]) => {
+    // Convert to overlay points
+    const pathPoints = data.daytimePoints.map(point => {
+      return sunPositionToOverlayPoint(point.azimuth, point.altitude, center);
+    });
     
-    // First point is sunrise (east)
-    const sunrisePoint = sortedPoints[0];
-    // Last point is sunset (west)
-    const sunsetPoint = sortedPoints[sortedPoints.length - 1];
-    
-    // Add sunrise marker (east)
-    if (sunrisePoint) {
-      const sunriseOverlayPoint = sunPositionToOverlayPoint(
-        sunrisePoint.azimuth, 
-        sunrisePoint.altitude, 
-        center
-      );
-      
-      svg.select('.trajectory-path')
-        .append('circle')
-        .attr('cx', sunriseOverlayPoint.x)
-        .attr('cy', sunriseOverlayPoint.y)
-        .attr('r', 6)
-        .attr('fill', 'red')
-        .attr('stroke', 'white')
-        .attr('stroke-width', 2);
-    }
-    
-    // Add sunset marker (west)
-    if (sunsetPoint) {
-      const sunsetOverlayPoint = sunPositionToOverlayPoint(
-        sunsetPoint.azimuth, 
-        sunsetPoint.altitude, 
-        center
-      );
-      
-      svg.select('.trajectory-path')
-        .append('circle')
-        .attr('cx', sunsetOverlayPoint.x)
-        .attr('cy', sunsetOverlayPoint.y)
-        .attr('r', 6)
-        .attr('fill', 'blue')
-        .attr('stroke', 'white')
-        .attr('stroke-width', 2);
-    }
-  }
-  
-  // Add current sun position marker (if above horizon)
-  if (sunPosition.value && sunPosition.value.altitude > 0) {
-    const sunPoint = sunPositionToOverlayPoint(
-      sunPosition.value.azimuth, 
-      sunPosition.value.altitude, 
-      center
-    );
-    
-    svg.select('.sun-marker')
-      .append('circle')
-      .attr('cx', sunPoint.x)
-      .attr('cy', sunPoint.y)
-      .attr('r', 12)
-      .attr('fill', 'yellow')
-      .attr('stroke', 'white')
+    // Draw the path
+    seasonalGroup.append('path')
+      .attr('d', lineFunction(pathPoints))
+      .attr('stroke', data.color)
       .attr('stroke-width', 2)
-      .attr('filter', 'drop-shadow(0 0 6px rgba(255, 255, 0, 0.7))');
-      
-    // Add shadow line from sun to center (representing shadow at the selected location)
-    // Only show if house is not visible
-    if (!houseVisible.value) {
-      svg.select('.sun-marker')
-        .append('line')
-        .attr('x1', sunPoint.x)
-        .attr('y1', sunPoint.y)
-        .attr('x2', center.x)
-        .attr('y2', center.y)
-        .attr('stroke', 'rgba(0, 0, 0, 0.4)')
-        .attr('stroke-width', 2)
-        .attr('stroke-dasharray', '4 2');
-    }
+      .attr('fill', 'none')
+      .attr('stroke-opacity', 0.8)
+      .attr('stroke-dasharray', '5,3')
+      .attr('class', `seasonal-path-${key}`);
+  });
+}
+
+// Function to update the seasonal legend in the bottom right corner
+function updateSeasonalLegend() {
+  if (!seasonalLegendContainer.value) return;
+  
+  // Get the legend SVG
+  const legendSvg = d3.select(seasonalLegendContainer.value).select('svg');
+  if (!legendSvg.empty()) {
+    // Clear previous legend
+    legendSvg.selectAll('*').remove();
     
-    // Add shadow indicator at center, but only if house is not visible
-    if (!houseVisible.value) {
-      svg.select('.sun-marker')
-        .append('circle')
-        .attr('cx', center.x)
-        .attr('cy', center.y)
-        .attr('r', 3)
-        .attr('fill', 'rgba(0, 0, 0, 0.5)')
-        .attr('stroke', 'white')
-        .attr('stroke-width', 1);
-    }
+    const seasonal = getAndCacheSeasonalTrajectories();
+    if (!seasonal) return;
+    
+    // Count valid trajectories
+    let validTrajectoryCount = 0;
+    const validTrajectories = {};
+    
+    // Validate trajectories
+    Object.entries(seasonal).forEach(([key, trajectory]) => {
+      if (trajectory && trajectory.points && trajectory.points.length > 0) {
+        validTrajectoryCount++;
+        validTrajectories[key] = trajectory;
+      }
+    });
+    
+    // If no valid trajectories, don't render legend
+    if (validTrajectoryCount === 0) return;
+    
+    // Create a group for the legend contents
+    const legend = legendSvg.append('g')
+      .attr('class', 'legend-content')
+      .attr('transform', 'translate(5, 20)');
+    
+    // Add legend title
+    legend.append('text')
+      .attr('x', 5)
+      .attr('y', -5)
+      .attr('font-size', '12px')
+      .attr('font-weight', 'bold')
+      .attr('fill', 'white')
+      .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
+      .text('Sun Paths');
+    
+    // Add Today's Path first (solid line)
+    legend.append('line')
+      .attr('x1', 0)
+      .attr('y1', 5)
+      .attr('x2', 20)
+      .attr('y2', 5)
+      .attr('stroke', 'orange')
+      .attr('stroke-width', 3)
+      .attr('stroke-opacity', 0.9);
+    
+    legend.append('text')
+      .attr('x', 25)
+      .attr('y', 9)
+      .attr('font-size', '11px')
+      .attr('fill', 'white')
+      .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
+      .text("Today's Path");
+    
+    // Start seasonal paths after today's path
+    let index = 1;
+    
+    // Add entries for each season
+    Object.entries(validTrajectories).forEach(([key, data]) => {
+      // Add line
+      legend.append('line')
+        .attr('x1', 0)
+        .attr('y1', index * 18 + 5)
+        .attr('x2', 20)
+        .attr('y2', index * 18 + 5)
+        .attr('stroke', data.color)
+        .attr('stroke-width', 2)
+        .attr('stroke-opacity', 0.8)
+        .attr('stroke-dasharray', '5,3');
+      
+      // Add label
+      legend.append('text')
+        .attr('x', 25)
+        .attr('y', index * 18 + 9)
+        .attr('font-size', '11px')
+        .attr('fill', 'white')
+        .attr('text-shadow', '1px 1px 2px rgba(0,0,0,0.8)')
+        .text(data.label);
+      
+      index++;
+    });
+    
+    // Add background rectangle - adjust height to include Today's Path
+    legend.insert('rect', ':first-child')
+      .attr('x', -5)
+      .attr('y', -20)
+      .attr('width', 125)
+      .attr('height', index * 18 + 25)
+      .attr('fill', 'rgba(0, 0, 0, 0.6)')
+      .attr('rx', 5);
+  }
+}
+
+// Function to clear the seasonal legend
+function clearSeasonalLegend() {
+  if (!seasonalLegendContainer.value) return;
+  
+  const legendSvg = d3.select(seasonalLegendContainer.value).select('svg');
+  if (!legendSvg.empty()) {
+    legendSvg.selectAll('*').remove();
   }
 }
 
@@ -421,6 +732,13 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
         @orientation-changed="handleOrientationChange"
       />
     </div>
+    
+    <!-- Seasonal paths legend in bottom right corner -->
+    <div 
+      v-if="props.showSeasonalPaths"
+      ref="seasonalLegendContainer" 
+      class="seasonal-legend-container"
+    ></div>
   </div>
 </template>
 
@@ -451,6 +769,14 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   pointer-events: none;
   background-color: rgba(255, 255, 255, 0.2);
   border-radius: 50%;
+}
+
+.seasonal-legend-container {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 20;
+  pointer-events: none;
 }
 
 .house-layout-overlay {

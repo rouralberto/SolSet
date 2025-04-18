@@ -11,6 +11,7 @@ SolSet is an interactive web application that visualizes the sun's position and 
 - **Time Selection**: Slider to choose any time in 15-minute increments
 - **Sun Data Display**: View detailed information about sun position, times, and shadow length
 - **House Layout Visualization**: Visualize optimal house orientation with shadow projections
+- **Seasonal Sun Paths**: Toggle visualization of sun trajectories for solstices and equinoxes
 - **Responsive Design**: Works on desktop and mobile devices
 
 ## Tech Stack

@@ -11,6 +11,7 @@ const date = ref(new Date());
 const time = ref(new Date());
 const loading = ref(false);
 const showHouse = ref(true); // Add state for house visibility
+const showSeasonalPaths = ref(false); // Add state for seasonal sun paths
 const houseOrientation = ref({ angle: 0, label: '0° (N)' }); // Store house orientation
 
 // Set default date to today and attempt to get user location
@@ -76,6 +77,11 @@ const toggleHouse = () => {
   showHouse.value = !showHouse.value;
 };
 
+// Toggle seasonal paths visibility
+const toggleSeasonalPaths = () => {
+  showSeasonalPaths.value = !showSeasonalPaths.value;
+};
+
 // Update house orientation from SunMap
 const updateHouseOrientation = (orientation) => {
   houseOrientation.value = orientation;
@@ -96,7 +102,7 @@ const updateHouseOrientation = (orientation) => {
     <div class="flex-grow-1 d-flex overflow-hidden">
       <!-- Fixed sidebar with controls -->
       <aside class="sidebar bg-white shadow border-end" style="width: 320px; overflow-y: auto; z-index: 5;">
-        <div class="p-3 d-flex flex-column gap-4">
+        <div class="p-3 pt-0 d-flex flex-column gap-4">
           <DaySlider 
             :current-date="date" 
             @update-date="updateDate" 
@@ -136,6 +142,21 @@ const updateHouseOrientation = (orientation) => {
             </div>
           </div>
           
+          <!-- Seasonal Paths Toggle -->
+          <div class="bg-white rounded border shadow-sm p-3">
+            <button 
+              @click="toggleSeasonalPaths" 
+              class="btn btn-outline-secondary w-100 d-flex align-items-center justify-content-center"
+            >
+              <i class="bi bi-calendar-week me-2"></i>
+              {{ showSeasonalPaths ? 'Hide Seasonal Paths' : 'Show Seasonal Paths' }}
+            </button>
+            <div v-if="showSeasonalPaths" class="mt-2 text-center text-muted small">
+              <i class="bi bi-info-circle me-1"></i>
+              Showing solstices & equinoxes
+            </div>
+          </div>
+          
           <SunInfo 
             :coordinates="coordinates" 
             :date="date"
@@ -158,6 +179,7 @@ const updateHouseOrientation = (orientation) => {
           :date="date"
           :time="time"
           v-model:showHouse="showHouse"
+          :show-seasonal-paths="showSeasonalPaths"
           @update-house-orientation="updateHouseOrientation"
         />
       </div>

@@ -64,7 +64,7 @@ const keyDates = [
 </script>
 
 <template>
-  <div class="card mb-4">
+  <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
       <h5 class="mb-0">Date</h5>
       <div class="d-flex align-items-center gap-2">
