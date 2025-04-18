@@ -822,8 +822,6 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 10;
-  border-radius: 5px;
-  padding: 0;
   overflow: visible; /* Allow shadows to extend beyond container */
 }
 
