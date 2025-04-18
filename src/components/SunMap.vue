@@ -237,6 +237,11 @@ watch([() => props.coordinates, sunPosition, sunTrajectory], () => {
   updateSunTrajectory();
 });
 
+// Add watch for house visibility changes to update shadow elements immediately
+watch(() => houseVisible.value, () => {
+  updateSunTrajectory();
+});
+
 // Function to update the sun trajectory overlay
 function updateSunTrajectory() {
   if (!sunOverlaySvg.value) return;
@@ -345,15 +350,18 @@ function updateSunTrajectory() {
       .attr('filter', 'drop-shadow(0 0 6px rgba(255, 255, 0, 0.7))');
       
     // Add shadow line from sun to center (representing shadow at the selected location)
-    svg.select('.sun-marker')
-      .append('line')
-      .attr('x1', sunPoint.x)
-      .attr('y1', sunPoint.y)
-      .attr('x2', center.x)
-      .attr('y2', center.y)
-      .attr('stroke', 'rgba(0, 0, 0, 0.4)')
-      .attr('stroke-width', 2)
-      .attr('stroke-dasharray', '4 2');
+    // Only show if house is not visible
+    if (!houseVisible.value) {
+      svg.select('.sun-marker')
+        .append('line')
+        .attr('x1', sunPoint.x)
+        .attr('y1', sunPoint.y)
+        .attr('x2', center.x)
+        .attr('y2', center.y)
+        .attr('stroke', 'rgba(0, 0, 0, 0.4)')
+        .attr('stroke-width', 2)
+        .attr('stroke-dasharray', '4 2');
+    }
     
     // Add shadow indicator at center, but only if house is not visible
     if (!houseVisible.value) {
