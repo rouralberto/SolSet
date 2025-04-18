@@ -10,6 +10,7 @@ const coordinates = ref({ lat: 43.3183, lng: -1.9812 }); // Donostia - San Sebas
 const date = ref(new Date());
 const time = ref(new Date());
 const loading = ref(false);
+const showHouse = ref(true); // Add state for house visibility
 
 // Set default date to today and attempt to get user location
 onMounted(() => {
@@ -68,6 +69,11 @@ const setNow = () => {
 const setLoading = (isLoading) => {
   loading.value = isLoading;
 };
+
+// Toggle house visibility
+const toggleHouse = () => {
+  showHouse.value = !showHouse.value;
+};
 </script>
 
 <template>
@@ -107,6 +113,17 @@ const setLoading = (isLoading) => {
             </button>
           </div>
           
+          <!-- House Layout Toggle -->
+          <div class="bg-white rounded border shadow-sm p-3">
+            <button 
+              @click="toggleHouse" 
+              class="btn btn-outline-secondary w-100 d-flex align-items-center justify-content-center"
+            >
+              <i class="bi bi-house me-2"></i>
+              {{ showHouse ? 'Hide House Layout' : 'Show House Layout' }}
+            </button>
+          </div>
+          
           <SunInfo 
             :coordinates="coordinates" 
             :date="date"
@@ -122,10 +139,12 @@ const setLoading = (isLoading) => {
             <span class="visually-hidden">Loading...</span>
           </div>
         </div>
+        
         <SunMap 
           v-model:coordinates="coordinates" 
           :date="date"
           :time="time"
+          v-model:showHouse="showHouse"
         />
       </div>
     </div>

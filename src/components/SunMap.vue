@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { initMap } from '../lib/mapUtils';
 import { getSunPosition, getSunTrajectory } from '../lib/sunCalc';
+import HouseLayout from './HouseLayout.vue';
 import 'leaflet/dist/leaflet.css';
 import * as d3 from 'd3';
 
@@ -18,22 +19,28 @@ const props = defineProps({
   time: {
     type: Date,
     default: () => new Date()
+  },
+  showHouse: {
+    type: Boolean,
+    default: true
   }
 });
 
 // Emits
-const emit = defineEmits(['update:coordinates']);
+const emit = defineEmits(['update:coordinates', 'update:showHouse']);
 
 // Map references
 const mapContainer = ref(null);
 const mapInstance = ref(null);
 const sunOverlayContainer = ref(null);
 const sunOverlaySvg = ref(null);
+const houseVisible = computed(() => props.showHouse);
 const lastCoordinates = ref({ lat: 0, lng: 0 });
 
 // Fixed dimensions for the sun trajectory overlay
 const OVERLAY_SIZE = 300; // pixels for width and height
 const OVERLAY_RADIUS = OVERLAY_SIZE / 2.5; // scale to fit within the overlay
+const HOUSE_SIZE = 150; // Size of the house in the center
 
 // Combine date and time for calculations
 const dateTime = computed(() => {
@@ -336,15 +343,17 @@ function updateSunTrajectory() {
       .attr('stroke-width', 2)
       .attr('stroke-dasharray', '4 2');
     
-    // Add shadow indicator at center
-    svg.select('.sun-marker')
-      .append('circle')
-      .attr('cx', center.x)
-      .attr('cy', center.y)
-      .attr('r', 3)
-      .attr('fill', 'rgba(0, 0, 0, 0.5)')
-      .attr('stroke', 'white')
-      .attr('stroke-width', 1);
+    // Add shadow indicator at center, but only if house is not visible
+    if (!houseVisible.value) {
+      svg.select('.sun-marker')
+        .append('circle')
+        .attr('cx', center.x)
+        .attr('cy', center.y)
+        .attr('r', 3)
+        .attr('fill', 'rgba(0, 0, 0, 0.5)')
+        .attr('stroke', 'white')
+        .attr('stroke-width', 1);
+    }
   }
 }
 
@@ -356,7 +365,7 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
     const horizonDist = OVERLAY_RADIUS * 1.5;
     const dx = horizonDist * Math.sin(azimuth);
     const dy = horizonDist * Math.cos(azimuth);
-    return { x: center.x + dx, y: center.y - dy };
+    return { x: center.x + dx, y: center.y - dy - 50 }; // Move trajectory up by 50px
   }
   
   // Scale distance by altitude (higher altitude = closer to center)
@@ -373,7 +382,8 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   const dy = distance * Math.cos(azimuth);
   
   // In SVG, y-axis is flipped (goes down), so we negate dy
-  return { x: center.x + dx, y: center.y - dy };
+  // Move trajectory up by 50px to make room for the house
+  return { x: center.x + dx, y: center.y - dy - 50 };
 }
 </script>
 
@@ -381,6 +391,17 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   <div class="sun-map-container">
     <div ref="mapContainer" id="map-container" class="map-container"></div>
     <div ref="sunOverlayContainer" class="sun-overlay-container"></div>
+    
+    <!-- Add the house layout overlay centered on the map -->
+    <div v-if="houseVisible" class="house-layout-overlay">
+      <HouseLayout 
+        :sunPosition="sunPosition" 
+        :size="HOUSE_SIZE"
+      />
+      <button @click="emit('update:showHouse', false)" class="house-toggle-btn">
+        <i class="bi bi-x"></i>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -411,6 +432,42 @@ function sunPositionToOverlayPoint(azimuth, altitude, center) {
   pointer-events: none;
   background-color: rgba(255, 255, 255, 0.2);
   border-radius: 50%;
+}
+
+.house-layout-overlay {
+  position: absolute;
+  width: 150px;
+  height: 150px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 15;
+  border-radius: 5px;
+  padding: 0;
+  overflow: visible; /* Allow shadows to extend beyond container */
+}
+
+.house-toggle-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  border: none;
+  background: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 50%;
+  color: #666;
+  z-index: 16;
+}
+
+.house-toggle-btn:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+:deep(.house-layout-svg) {
+  width: 100%;
+  height: 100%;
 }
 
 :deep(.sun-overlay-svg) {
