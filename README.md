@@ -13,17 +13,21 @@ SolSet is an interactive web application that visualizes the sun's position and 
 - **House Layout Visualization**: Visualize optimal house orientation with shadow projections
 - **Seasonal Sun Paths**: Toggle visualization of sun trajectories for solstices and equinoxes
 - **Responsive Design**: Works on desktop and mobile devices
+- **Real-time Updates**: Sun position and data update as you move the map
+- **Optimal Orientation**: Calculate the best orientation for a house based on sun position
 
 ## Tech Stack
 
-- Vue.js 3.5 (Composition API)
-- Vite 6.3 (Build tool)
+- Vue.js 3.5.13 (Composition API)
+- Vite 6.3.2 (Build tool)
 - Leaflet.js 1.9.4 (Map rendering)
 - SunCalc.js 1.9.0 (Sun calculations)
 - Bootstrap 5.3.5 (Styling)
 - Bootstrap Icons 1.11.3
 - D3.js 7.9.0 (SVG manipulation for house layout)
 - Axios 1.8.4 (HTTP client)
+- Autoprefixer 10.4.21 (CSS processing)
+- PostCSS 8.5.3 (CSS processing)
 
 ## Getting Started
 
