@@ -111,7 +111,7 @@ const updateHouseOrientation = (orientation) => {
     <div class="flex-grow-1 d-flex overflow-hidden">
       <!-- Fixed sidebar with controls -->
       <aside class="sidebar bg-white shadow border-end" style="width: 320px; overflow-y: auto; z-index: 5;">
-        <div class="p-3 pt-0 d-flex flex-column gap-4">
+        <div class="p-3 pt-0 d-flex flex-column gap-3">
           <DateTimeSlider 
             :current-date="date"
             :current-time="time"
@@ -158,6 +158,11 @@ const updateHouseOrientation = (orientation) => {
             :time="time"
             :house-orientation="houseOrientation"
           />
+
+          <a href="https://github.com/rouralberto/solset" target="_blank" class="text-muted small text-decoration-none">
+            <i class="bi bi-github"></i>
+            See project in GitHub
+          </a>
         </div>
       </aside>
 
