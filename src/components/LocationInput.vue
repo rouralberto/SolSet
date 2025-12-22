@@ -1,58 +1,109 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { geocodeAddress } from '../lib/mapUtils';
+import { debounce, getRecentLocations, formatCoordinates } from '../lib/utils';
 
-// Emit events for parent component
-const emit = defineEmits(['update-coordinates', 'loading']);
-
-// Input value and error state
-const addressInput = ref('');
-const error = ref('');
-const isSearching = ref(false);
-const toastContainer = ref(null);
-
-// Toast-related refs and functions
-const showToast = ref(false);
-const toastMessage = ref('');
-
-// Initialize toast elements
-onMounted(() => {
-  // Create bootstrap toast instance if needed
+// Props
+const props = defineProps({
+  coordinates: {
+    type: Object,
+    default: () => ({ lat: 0, lng: 0 })
+  }
 });
 
-// Function to display toast notification
-function displayToast(message) {
-  toastMessage.value = message;
-  showToast.value = true;
-  
-  // Auto-hide after 5 seconds
+// Emit events
+const emit = defineEmits(['update-coordinates', 'loading']);
+
+// State
+const addressInput = ref('');
+const isSearching = ref(false);
+const showDropdown = ref(false);
+const recentLocations = ref([]);
+
+// Toast state
+const toast = ref({ show: false, message: '', type: 'error' });
+
+// Formatted current coordinates
+const currentCoords = computed(() => {
+  return formatCoordinates(props.coordinates.lat, props.coordinates.lng);
+});
+
+// Show toast notification
+function showToast(message, type = 'error') {
+  toast.value = { show: true, message, type };
   setTimeout(() => {
-    showToast.value = false;
-  }, 5000);
+    toast.value.show = false;
+  }, 4000);
 }
 
-// Handle search by address
+// Load recent locations when dropdown opens
+function handleFocus() {
+  recentLocations.value = getRecentLocations();
+  if (recentLocations.value.length > 0 || addressInput.value === '') {
+    showDropdown.value = true;
+  }
+}
+
+// Close dropdown
+function handleBlur() {
+  // Delay to allow click on dropdown items
+  setTimeout(() => {
+    showDropdown.value = false;
+  }, 200);
+}
+
+// Select a recent location
+function selectRecentLocation(location) {
+  const coords = {
+    lat: location.lat,
+    lng: location.lng,
+    name: location.name,
+    forceUpdate: true
+  };
+  emit('update-coordinates', coords);
+  addressInput.value = location.name || `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`;
+  showDropdown.value = false;
+}
+
+// Debounced search
+const debouncedSearch = debounce(async (query) => {
+  if (!query || query.length < 3) return;
+  await performSearch(query);
+}, 400);
+
+// Handle input change
+function handleInput() {
+  showDropdown.value = false;
+  if (addressInput.value.length >= 3) {
+    debouncedSearch(addressInput.value);
+  }
+}
+
+// Handle search
 async function handleSearch() {
   if (!addressInput.value) {
-    displayToast('Please enter an address or coordinates');
+    showToast('Please enter an address or coordinates');
     return;
   }
-  
-  error.value = '';
+  await performSearch(addressInput.value);
+}
+
+// Perform the actual search
+async function performSearch(query) {
   isSearching.value = true;
   emit('loading', true);
-  
+
   try {
     // Try to parse as coordinates first (format: "lat, lng")
-    if (addressInput.value.match(/^-?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$/)) {
-      const [lat, lng] = addressInput.value.split(',').map(coord => parseFloat(coord.trim()));
-      
+    if (query.match(/^-?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$/)) {
+      const [lat, lng] = query.split(',').map(coord => parseFloat(coord.trim()));
+
       // Basic validation
       if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
         const coords = {
           lat,
           lng,
-          forceUpdate: true // Force map update
+          forceUpdate: true
         };
         emit('update-coordinates', coords);
         isSearching.value = false;
@@ -60,16 +111,17 @@ async function handleSearch() {
         return;
       }
     }
-    
+
     // If not coordinates, try geocoding
-    const response = await geocodeAddress(addressInput.value);
+    const response = await geocodeAddress(query);
     const coords = {
       ...response,
-      forceUpdate: true // Force map update
+      name: query,
+      forceUpdate: true
     };
     emit('update-coordinates', coords);
   } catch (err) {
-    displayToast(err.message || 'Error finding location. Please try again.');
+    showToast(err.message || 'Location not found. Please try a different search.');
   } finally {
     isSearching.value = false;
     emit('loading', false);
@@ -78,43 +130,32 @@ async function handleSearch() {
 
 // Handle browser geolocation
 function handleGeolocate() {
-  error.value = '';
-  
   if (!navigator.geolocation) {
-    displayToast('Geolocation is not supported by your browser');
+    showToast('Geolocation is not supported by your browser');
     return;
   }
-  
+
   emit('loading', true);
-  console.log('Requesting geolocation permission...');
-  
+
   navigator.geolocation.getCurrentPosition(
-    // Success
     (position) => {
-      console.log('Geolocation succeeded:', position.coords);
-      
-      // Create a new coordinates object with forceUpdate flag
       const coords = {
         lat: position.coords.latitude,
         lng: position.coords.longitude,
-        forceUpdate: true // Force map update
+        name: 'Current Location',
+        forceUpdate: true
       };
-      
-      // Update the input field with the coordinates
-      addressInput.value = `${coords.lat}, ${coords.lng}`;
-      
-      // Force a delay before emitting to ensure proper rendering order
+
+      addressInput.value = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+
       setTimeout(() => {
-        // Emit the coordinates
         emit('update-coordinates', coords);
         emit('loading', false);
-      }, 150);
+      }, 100);
     },
-    // Error
     (err) => {
-      console.error('Geolocation error:', err);
-      let errorMessage = 'An unknown error occurred while getting location.';
-      
+      let errorMessage = 'Unable to get your location.';
+
       switch (err.code) {
         case err.PERMISSION_DENIED:
           errorMessage = 'Location access denied. Please enable location services.';
@@ -123,14 +164,13 @@ function handleGeolocate() {
           errorMessage = 'Location information is unavailable.';
           break;
         case err.TIMEOUT:
-          errorMessage = 'Location request timed out.';
+          errorMessage = 'Location request timed out. Please try again.';
           break;
       }
-      
-      displayToast(errorMessage);
+
+      showToast(errorMessage);
       emit('loading', false);
     },
-    // Options
     {
       enableHighAccuracy: true,
       timeout: 10000,
@@ -141,70 +181,209 @@ function handleGeolocate() {
 </script>
 
 <template>
-  <div>
-    <div class="row g-2">
-      <div class="col position-relative">
+  <div class="location-input-container">
+    <div class="search-wrapper">
+      <div class="search-input-group">
+        <i class="bi bi-search search-icon"></i>
         <input
           v-model="addressInput"
           type="text"
-          placeholder="Enter address or coordinates (lat, lng)"
-          class="form-control"
+          :placeholder="`Search location or enter coordinates • ${currentCoords}`"
+          class="solset-input search-input"
           @keyup.enter="handleSearch"
+          @input="handleInput"
+          @focus="handleFocus"
+          @blur="handleBlur"
+          aria-label="Search location"
         />
-        <div v-if="isSearching" class="position-absolute top-50 end-0 translate-middle-y me-3">
-          <div class="spinner-border spinner-border-sm text-primary" role="status">
-            <span class="visually-hidden">Loading...</span>
-          </div>
+        <div v-if="isSearching" class="search-spinner">
+          <i class="bi bi-arrow-repeat animate-spin"></i>
         </div>
       </div>
-      
-      <div class="col-auto d-flex gap-2">
+
+      <!-- Recent Locations Dropdown -->
+      <div v-if="showDropdown && recentLocations.length > 0" class="search-dropdown">
+        <div class="dropdown-header">
+          <i class="bi bi-clock-history"></i>
+          Recent Locations
+        </div>
         <button
-          @click="handleSearch"
-          class="btn btn-primary"
-          :disabled="isSearching"
+          v-for="(loc, idx) in recentLocations.slice(0, 5)"
+          :key="idx"
+          class="dropdown-item"
+          @mousedown.prevent="selectRecentLocation(loc)"
         >
-          Search
-        </button>
-        
-        <button
-          @click="handleGeolocate"
-          class="btn btn-success d-flex align-items-center"
-          :disabled="isSearching"
-        >
-          <i class="bi bi-geo-alt me-1"></i>
-          <span class="d-none d-md-inline">Locate Me</span>
+          <i class="bi bi-geo-alt"></i>
+          <div class="dropdown-item-content">
+            <span class="dropdown-item-name">{{ loc.name || 'Unnamed Location' }}</span>
+            <span class="dropdown-item-coords">{{ loc.lat.toFixed(4) }}, {{ loc.lng.toFixed(4) }}</span>
+          </div>
         </button>
       </div>
     </div>
-    
-    <!-- Toast Container -->
-    <div class="toast-container position-fixed bottom-0 end-0 p-3">
-      <div 
-        class="toast align-items-center text-bg-danger border-0" 
-        role="alert" 
-        aria-live="assertive" 
-        aria-atomic="true"
-        :class="{ 'show': showToast }"
+
+    <div class="search-actions">
+      <button
+        @click="handleSearch"
+        class="solset-btn solset-btn-primary"
+        :disabled="isSearching"
+        aria-label="Search"
       >
-        <div class="d-flex">
-          <div class="toast-body">
-            {{ toastMessage }}
-          </div>
-          <button 
-            type="button" 
-            class="btn-close btn-close-white me-2 m-auto" 
-            @click="showToast = false"
-            aria-label="Close"
-          ></button>
-        </div>
-      </div>
+        <i class="bi bi-search"></i>
+        <span>Search</span>
+      </button>
+
+      <button
+        @click="handleGeolocate"
+        class="solset-btn solset-btn-secondary"
+        :disabled="isSearching"
+        aria-label="Use my location"
+      >
+        <i class="bi bi-crosshair"></i>
+        <span>My Location</span>
+      </button>
     </div>
+
+    <!-- Toast Notification -->
+    <Teleport to="body">
+      <Transition name="toast">
+        <div v-if="toast.show" :class="['solset-toast', toast.type]">
+          <i :class="toast.type === 'error' ? 'bi bi-exclamation-circle' : 'bi bi-check-circle'"></i>
+          <span>{{ toast.message }}</span>
+          <button class="solset-btn solset-btn-ghost solset-btn-icon" @click="toast.show = false">
+            <i class="bi bi-x"></i>
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
-.toast-container {
-  z-index: 1090;
+.location-input-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
-</style> 
+
+.search-wrapper {
+  flex: 1;
+  position: relative;
+}
+
+.search-input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.search-input {
+  padding-left: 40px;
+  padding-right: 40px;
+}
+
+.search-spinner {
+  position: absolute;
+  right: 14px;
+  color: var(--sun-gold);
+  font-size: 16px;
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  overflow: hidden;
+  animation: fade-in 0.2s ease;
+}
+
+.dropdown-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  text-align: left;
+  font-family: var(--font-display);
+}
+
+.dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.dropdown-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.dropdown-item i {
+  color: var(--text-tertiary);
+  font-size: 16px;
+}
+
+.dropdown-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown-item-name {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.dropdown-item-coords {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.search-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Toast Transition */
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.3s ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(20px);
+}
+</style>

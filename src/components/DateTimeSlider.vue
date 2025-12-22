@@ -1,7 +1,7 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
-import { dateToDayOfYear, dayOfYearToDate } from '../lib/sunCalc';
-import { getSunTimes } from '../lib/sunCalc';
+import { ref, computed, watch } from 'vue';
+import { dateToDayOfYear, dayOfYearToDate, getSunTimes } from '../lib/sunCalc';
+import { getApproximateTimezone } from '../lib/utils';
 
 // Props
 const props = defineProps({
@@ -16,14 +16,22 @@ const props = defineProps({
   coordinates: {
     type: Object,
     default: () => ({ lat: 0, lng: 0 })
+  },
+  isAnimating: {
+    type: Boolean,
+    default: false
   }
 });
 
 // Emit events
-const emit = defineEmits(['update-date', 'update-time']);
+const emit = defineEmits(['update-date', 'update-time', 'toggle-animation']);
 
-// Convert current date to day of year
+// State
 const dayOfYear = ref(dateToDayOfYear(props.currentDate));
+const showDateInput = ref(false);
+const showTimeInput = ref(false);
+const dateInputValue = ref('');
+const timeInputValue = ref('');
 
 // Maximum day based on leap year
 const maxDay = computed(() => {
@@ -31,40 +39,35 @@ const maxDay = computed(() => {
   return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365;
 });
 
-// Calculate approximate timezone offset based on longitude
-// Each 15 degrees of longitude roughly corresponds to 1 hour time difference
+// Timezone offset based on longitude
 const locationTimezoneOffset = computed(() => {
-  // Calculate hours offset from UTC based on longitude
-  return Math.round(props.coordinates.lng / 15);
+  return getApproximateTimezone(props.coordinates.lng);
 });
 
-// Convert time to minutes since midnight (0-1439) for the location's timezone
+// Convert time to minutes since midnight
 const totalMinutes = ref(0);
 
-// Get sun times for the current location using the provided date
+// Get sun times for the current location
 const sunTimes = computed(() => {
   return getSunTimes(props.currentDate, props.coordinates.lat, props.coordinates.lng);
 });
 
-// Convert sun times to minutes since midnight in the location's timezone
+// Convert sun times to minutes for gradient
 const sunTimesInMinutes = computed(() => {
   const times = sunTimes.value;
-  
-  // Helper function to get minutes since midnight for a date, adjusting for location timezone
+
   const getMinutesSinceMidnight = (date) => {
     if (!date || isNaN(date.getTime())) return null;
-    
-    // Get UTC hours and minutes
+
     const utcHours = date.getUTCHours();
     const utcMinutes = date.getUTCMinutes();
-    
-    // Adjust for location's timezone
+
     let locationHours = (utcHours + locationTimezoneOffset.value) % 24;
     if (locationHours < 0) locationHours += 24;
-    
+
     return locationHours * 60 + utcMinutes;
   };
-  
+
   return {
     dawn: getMinutesSinceMidnight(times.dawn),
     sunrise: getMinutesSinceMidnight(times.sunrise),
@@ -77,89 +80,72 @@ const sunTimesInMinutes = computed(() => {
   };
 });
 
-// Seasonal gradient style based on solstices and equinoxes
+// Season gradient style
 const seasonGradientStyle = computed(() => {
   const year = props.currentDate.getFullYear();
   const isNorthernHemisphere = props.coordinates.lat >= 0;
-  
-  // Define key dates with day of year values
-  // Values for typical non-leap year (approximation)
-  const springEquinox = dateToDayOfYear(new Date(year, 2, 20)); // March 20
-  const summerSolstice = dateToDayOfYear(new Date(year, 5, 21)); // June 21
-  const fallEquinox = dateToDayOfYear(new Date(year, 8, 22));    // September 22
-  const winterSolstice = dateToDayOfYear(new Date(year, 11, 21)); // December 21
-  
-  // Calculate percentages based on days
-  const getPercent = (day) => {
-    return ((day / maxDay.value) * 100).toFixed(1) + '%';
-  };
-  
-  // Determine colors based on hemisphere
-  const gradientValue = isNorthernHemisphere ? 
-    `linear-gradient(to right, 
-      #80a9e0 0%,                           /* Winter (start of year) */
-      #80a9e0 ${getPercent(springEquinox)},    /* End of winter */
-      #a3d9a5 ${getPercent(springEquinox)},    /* Spring begins */
-      #a3d9a5 ${getPercent(summerSolstice)},   /* End of spring */
-      #ffdb58 ${getPercent(summerSolstice)},   /* Summer begins */
-      #ffdb58 ${getPercent(fallEquinox)},      /* End of summer */
-      #d2691e ${getPercent(fallEquinox)},      /* Fall begins */
-      #d2691e ${getPercent(winterSolstice)},   /* End of fall */
-      #80a9e0 ${getPercent(winterSolstice)},   /* Winter begins */
-      #80a9e0 100%                          /* Winter (end of year) */
+
+  const springEquinox = dateToDayOfYear(new Date(year, 2, 20));
+  const summerSolstice = dateToDayOfYear(new Date(year, 5, 21));
+  const fallEquinox = dateToDayOfYear(new Date(year, 8, 22));
+  const winterSolstice = dateToDayOfYear(new Date(year, 11, 21));
+
+  const getPercent = (day) => ((day / maxDay.value) * 100).toFixed(1) + '%';
+
+  const gradientValue = isNorthernHemisphere ?
+    `linear-gradient(to right,
+      #60a5fa 0%,
+      #60a5fa ${getPercent(springEquinox)},
+      #34d399 ${getPercent(springEquinox)},
+      #34d399 ${getPercent(summerSolstice)},
+      #fbbf24 ${getPercent(summerSolstice)},
+      #fbbf24 ${getPercent(fallEquinox)},
+      #f97316 ${getPercent(fallEquinox)},
+      #f97316 ${getPercent(winterSolstice)},
+      #60a5fa ${getPercent(winterSolstice)},
+      #60a5fa 100%
     )` :
-    `linear-gradient(to right, 
-      #ffdb58 0%,                           /* Summer (Jan) */
-      #ffdb58 ${getPercent(springEquinox)},    /* End of summer */
-      #d2691e ${getPercent(springEquinox)},    /* Fall begins */
-      #d2691e ${getPercent(summerSolstice)},   /* End of fall */
-      #80a9e0 ${getPercent(summerSolstice)},   /* Winter begins */
-      #80a9e0 ${getPercent(fallEquinox)},      /* End of winter */
-      #a3d9a5 ${getPercent(fallEquinox)},      /* Spring begins */
-      #a3d9a5 ${getPercent(winterSolstice)},   /* End of spring */
-      #ffdb58 ${getPercent(winterSolstice)},   /* Summer begins */
-      #ffdb58 100%                          /* Summer (end of year) */
+    `linear-gradient(to right,
+      #fbbf24 0%,
+      #fbbf24 ${getPercent(springEquinox)},
+      #f97316 ${getPercent(springEquinox)},
+      #f97316 ${getPercent(summerSolstice)},
+      #60a5fa ${getPercent(summerSolstice)},
+      #60a5fa ${getPercent(fallEquinox)},
+      #34d399 ${getPercent(fallEquinox)},
+      #34d399 ${getPercent(winterSolstice)},
+      #fbbf24 ${getPercent(winterSolstice)},
+      #fbbf24 100%
     )`;
-    
-  return {
-    '--season-gradient': gradientValue
-  };
+
+  return { '--season-gradient': gradientValue };
 });
 
-// Dynamic gradient style based on sun times
+// Time gradient style
 const timeGradientStyle = computed(() => {
   const times = sunTimesInMinutes.value;
-  
-  // Default to a gray color if sun times aren't available
+
   if (!times.sunrise || !times.sunset) {
-    return {
-      '--time-gradient': '#e0e0e0'  // Simple gray color
-    };
+    return { '--time-gradient': 'var(--bg-tertiary)' };
   }
-  
-  // Calculate percentages based on actual times
-  const getPercent = (minutes) => {
-    return ((minutes / 1440) * 100).toFixed(1) + '%';
-  };
-  
-  // Create dynamic gradient with actual sun times
-  const gradientValue = `linear-gradient(to right, 
-    #0a1a40 0%,                           /* Night (midnight) */
-    #0a1a40 ${getPercent(times.dawn || 360)},       /* Night end */
-    #7986cb ${getPercent(times.dawn || 360)},       /* Dawn twilight starts */
-    #ffb74d ${getPercent(times.sunrise || 400)},    /* Sunrise */
-    #90caf9 ${getPercent(times.sunriseEnd || 420)}, /* Morning */
-    #64b5f6 ${getPercent(times.solarNoon || 720)},  /* Midday */
-    #90caf9 ${getPercent(times.sunsetStart || 1020)}, /* Afternoon */
-    #ffb74d ${getPercent(times.sunset || 1040)},      /* Sunset */
-    #7986cb ${getPercent(times.dusk || 1080)},        /* Dusk twilight */
-    #0a1a40 ${getPercent(times.night || 1140)},       /* Night begins */
-    #0a1a40 100%                           /* Night (end of day) */
+
+  const getPercent = (minutes) => ((minutes / 1440) * 100).toFixed(1) + '%';
+
+  const gradientValue = `linear-gradient(to right,
+    #1e3a5f 0%,
+    #1e3a5f ${getPercent(times.dawn || 360)},
+    #7c3aed ${getPercent(times.dawn || 360)},
+    #f59e0b ${getPercent(times.sunrise || 400)},
+    #7dd3fc ${getPercent(times.sunriseEnd || 420)},
+    #0ea5e9 ${getPercent(times.solarNoon || 720)},
+    #7dd3fc ${getPercent(times.sunsetStart || 1020)},
+    #f59e0b ${getPercent(times.sunset || 1040)},
+    #7c3aed ${getPercent(times.dusk || 1080)},
+    #1e3a5f ${getPercent(times.night || 1140)},
+    #1e3a5f 100%
   )`;
-  
-  return {
-    '--time-gradient': gradientValue
-  };
+
+  return { '--time-gradient': gradientValue };
 });
 
 // Watch for external date changes
@@ -167,36 +153,31 @@ watch(() => props.currentDate, (newDate) => {
   dayOfYear.value = dateToDayOfYear(newDate);
 }, { deep: true });
 
-// Update minutes whenever currentTime or coordinates change
+// Update minutes when time or coordinates change
 watch([() => props.currentTime, () => props.coordinates], () => {
-  // Calculate location time by adjusting for timezone difference
-  // Get the UTC time first
   const utcHours = props.currentTime.getUTCHours();
   const utcMinutes = props.currentTime.getUTCMinutes();
-  
-  // Apply location's timezone offset
+
   let locationHours = (utcHours + locationTimezoneOffset.value) % 24;
   if (locationHours < 0) locationHours += 24;
-  
-  // Set total minutes based on location time
+
   totalMinutes.value = locationHours * 60 + utcMinutes;
 }, { immediate: true });
 
-// Format the date as month and day
+// Format date
 function formatDate(day) {
   const date = dayOfYearToDate(day, props.currentDate.getFullYear());
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-// Format time as HH:MM
+// Format time
 function formatTime(minutes) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
-  
   return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
 }
 
-// Handle date slider change
+// Handle date slider
 function handleDateSliderChange(event) {
   const day = parseInt(event.target.value);
   const newDate = dayOfYearToDate(day, props.currentDate.getFullYear());
@@ -204,195 +185,338 @@ function handleDateSliderChange(event) {
   emit('update-date', newDate);
 }
 
-// Handle time slider change
+// Handle time slider
 function handleTimeSliderChange(event) {
   const minutes = parseInt(event.target.value);
   totalMinutes.value = minutes;
-  
-  // Create new time in location's timezone, then convert back to local time for the app
-  // First get the current UTC time
+
   const utcDate = new Date(props.currentTime);
-  utcDate.setUTCHours(0, 0, 0, 0); // Reset to midnight UTC
-  
-  // Calculate hours and minutes in location time
+  utcDate.setUTCHours(0, 0, 0, 0);
+
   const locationHours = Math.floor(minutes / 60);
   const locationMinutes = minutes % 60;
-  
-  // Convert from location time to UTC
+
   let utcHours = (locationHours - locationTimezoneOffset.value);
   if (utcHours < 0) utcHours += 24;
   if (utcHours >= 24) utcHours -= 24;
-  
-  // Set UTC time
+
   utcDate.setUTCHours(utcHours, locationMinutes, 0, 0);
-  
-  // Convert to local time
-  const newTime = new Date(utcDate);
-  
-  emit('update-time', newTime);
+
+  emit('update-time', new Date(utcDate));
 }
 
-// Set both date and time to current
+// Set to now
 function setNow() {
   const now = new Date();
-  
-  // Update date
-  const day = dateToDayOfYear(now);
-  dayOfYear.value = day;
+
+  dayOfYear.value = dateToDayOfYear(now);
   emit('update-date', now);
-  
-  // Update time
+
   const utcHours = now.getUTCHours();
   const utcMinutes = now.getUTCMinutes();
-  
-  // Calculate current time at location
+
   let locationHours = (utcHours + locationTimezoneOffset.value) % 24;
   if (locationHours < 0) locationHours += 24;
-  
-  // Set total minutes for the slider
+
   totalMinutes.value = locationHours * 60 + utcMinutes;
-  
-  // Emit time update
   emit('update-time', now);
 }
 
-// Initialize Bootstrap tooltips
-onMounted(() => {
-  // If Bootstrap's Tooltip feature is available, initialize the tooltips
-  if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    tooltipTriggerList.map(function (tooltipTriggerEl) {
-      return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
+// Direct date input
+function openDateInput() {
+  const date = dayOfYearToDate(dayOfYear.value, props.currentDate.getFullYear());
+  dateInputValue.value = date.toISOString().split('T')[0];
+  showDateInput.value = true;
+}
+
+function handleDateInput() {
+  const newDate = new Date(dateInputValue.value);
+  if (!isNaN(newDate.getTime())) {
+    dayOfYear.value = dateToDayOfYear(newDate);
+    emit('update-date', newDate);
   }
-});
+  showDateInput.value = false;
+}
+
+// Direct time input
+function openTimeInput() {
+  timeInputValue.value = formatTime(totalMinutes.value);
+  showTimeInput.value = true;
+}
+
+function handleTimeInput() {
+  const [hours, mins] = timeInputValue.value.split(':').map(Number);
+  if (!isNaN(hours) && !isNaN(mins)) {
+    const minutes = hours * 60 + mins;
+    totalMinutes.value = minutes;
+
+    const utcDate = new Date(props.currentTime);
+    utcDate.setUTCHours(0, 0, 0, 0);
+
+    let utcHours = (hours - locationTimezoneOffset.value);
+    if (utcHours < 0) utcHours += 24;
+    if (utcHours >= 24) utcHours -= 24;
+
+    utcDate.setUTCHours(utcHours, mins, 0, 0);
+    emit('update-time', new Date(utcDate));
+  }
+  showTimeInput.value = false;
+}
 </script>
 
 <template>
-  <div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0">Date & Time</h5>
-      <button 
-        @click="setNow" 
-        class="btn btn-primary btn-sm d-flex align-items-center gap-2"
-      >
-        <i class="bi bi-clock"></i>
-        Now
-      </button>
+  <div class="solset-card datetime-card">
+    <div class="solset-card-header">
+      <h5><i class="bi bi-clock-history me-2"></i>Date & Time</h5>
+      <div class="header-actions">
+        <button
+          class="solset-btn solset-btn-ghost solset-btn-icon"
+          :class="{ 'animate-glow': isAnimating }"
+          @click="emit('toggle-animation')"
+          :aria-label="isAnimating ? 'Stop animation' : 'Start animation'"
+          :title="isAnimating ? 'Stop (Space)' : 'Animate (Space)'"
+        >
+          <i :class="isAnimating ? 'bi bi-pause-fill' : 'bi bi-play-fill'"></i>
+        </button>
+        <button
+          class="solset-btn solset-btn-primary btn-sm"
+          @click="setNow"
+          title="Jump to now (N)"
+        >
+          <i class="bi bi-clock"></i>
+          Now
+        </button>
+      </div>
     </div>
-    
-    <div class="card-body">
-      <!-- Date section -->
-      <div class="d-flex justify-content-between align-items-center">
-        <span class="text-muted">Date</span>
-        <span class="badge bg-light text-dark">{{ formatDate(dayOfYear) }}</span>
+
+    <div class="solset-card-body">
+      <!-- Date Section -->
+      <div class="slider-section">
+        <div class="slider-header">
+          <span class="slider-label">Date</span>
+          <button
+            v-if="!showDateInput"
+            class="value-badge"
+            @click="openDateInput"
+            title="Click to edit"
+          >
+            {{ formatDate(dayOfYear) }}
+          </button>
+          <input
+            v-else
+            type="date"
+            v-model="dateInputValue"
+            @blur="handleDateInput"
+            @keyup.enter="handleDateInput"
+            class="solset-input date-input"
+            autofocus
+          />
+        </div>
+        <div class="slider-container">
+          <input
+            type="range"
+            class="solset-slider season-slider"
+            :min="1"
+            :max="maxDay"
+            v-model="dayOfYear"
+            @input="handleDateSliderChange"
+            :style="seasonGradientStyle"
+            aria-label="Date slider"
+          />
+          <div class="slider-markers">
+            <span>Jan</span>
+            <span>Jul</span>
+            <span>Dec</span>
+          </div>
+        </div>
       </div>
-      <div class="position-relative">
-        <input
-          type="range"
-          class="form-range season-slider"
-          :min="1"
-          :max="maxDay"
-          v-model="dayOfYear"
-          @input="handleDateSliderChange"
-          :style="seasonGradientStyle"
-        />
+
+      <!-- Time Section -->
+      <div class="slider-section">
+        <div class="slider-header">
+          <span class="slider-label">Time</span>
+          <button
+            v-if="!showTimeInput"
+            class="value-badge mono"
+            @click="openTimeInput"
+            title="Click to edit"
+          >
+            {{ formatTime(totalMinutes) }}
+          </button>
+          <input
+            v-else
+            type="time"
+            v-model="timeInputValue"
+            @blur="handleTimeInput"
+            @keyup.enter="handleTimeInput"
+            class="solset-input time-input"
+            autofocus
+          />
+        </div>
+        <div class="slider-container">
+          <input
+            type="range"
+            class="solset-slider time-slider"
+            min="0"
+            max="1439"
+            step="5"
+            v-model="totalMinutes"
+            @input="handleTimeSliderChange"
+            :style="timeGradientStyle"
+            aria-label="Time slider"
+          />
+          <div class="slider-markers">
+            <span>00:00</span>
+            <span>12:00</span>
+            <span>24:00</span>
+          </div>
+        </div>
       </div>
-      
-      <!-- Time section -->
-      <div class="d-flex justify-content-between align-items-center">
-        <span class="text-muted">Time</span>
-        <span class="badge bg-light text-dark">{{ formatTime(totalMinutes) }}</span>
-      </div>
-      <div class="position-relative">
-        <input
-          type="range"
-          class="form-range time-slider"
-          min="0"
-          max="1439"
-          step="5"
-          v-model="totalMinutes"
-          @input="handleTimeSliderChange"
-          :style="timeGradientStyle"
-        />
+
+      <!-- Keyboard Hints -->
+      <div class="keyboard-hints">
+        <span><span class="kbd">←</span><span class="kbd">→</span> ±15min</span>
+        <span><span class="kbd">⇧</span>+<span class="kbd">←</span><span class="kbd">→</span> ±1day</span>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* Base styling for range inputs */
-.form-range {
-  -webkit-appearance: none;
-  width: 100%;
-  background: transparent;
+.datetime-card {
+  overflow: visible;
 }
 
-/* Styling for time slider */
-.time-slider::-webkit-slider-runnable-track {
-  -webkit-appearance: none;
-  height: 8px;
-  border-radius: 4px;
-  width: 100%;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.time-slider::-moz-range-track {
-  height: 8px;
-  border-radius: 4px;
-  width: 100%;
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
 }
 
-/* Styling for season slider */
+.slider-section {
+  margin-bottom: 20px;
+}
+
+.slider-section:last-of-type {
+  margin-bottom: 12px;
+}
+
+.slider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.slider-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+}
+
+.value-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.value-badge:hover {
+  background: var(--bg-accent);
+  border-color: var(--sun-gold);
+  color: var(--sun-orange);
+}
+
+.value-badge.mono {
+  font-family: var(--font-mono);
+}
+
+.date-input,
+.time-input {
+  padding: 4px 8px;
+  font-size: 13px;
+  width: auto;
+}
+
+.slider-container {
+  position: relative;
+}
+
+.slider-markers {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 2px 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+/* Custom Slider Track Styling */
+.season-slider,
+.time-slider {
+  height: 10px;
+}
+
 .season-slider::-webkit-slider-runnable-track {
-  -webkit-appearance: none;
-  height: 8px;
-  border-radius: 4px;
-  width: 100%;
+  background: var(--season-gradient) !important;
+  height: 10px;
+  border-radius: 9999px;
+}
+
+.season-slider::-webkit-slider-thumb {
+  margin-top: -5px;
 }
 
 .season-slider::-moz-range-track {
-  height: 8px;
-  border-radius: 4px;
-  width: 100%;
+  background: var(--season-gradient) !important;
+  height: 10px;
+  border-radius: 9999px;
 }
 
-/* Add some styling for the thumbs to make them more visible */
-.form-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  height: 16px;
-  width: 16px;
-  border-radius: 50%;
-  background: #fff;
-  cursor: pointer;
-  margin-top: -4px; /* offset for proper centering */
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.2);
+.time-slider::-webkit-slider-runnable-track {
+  background: var(--time-gradient) !important;
+  height: 10px;
+  border-radius: 9999px;
 }
 
-.form-range::-moz-range-thumb {
-  height: 16px;
-  width: 16px;
-  border-radius: 50%;
-  background: #fff;
-  cursor: pointer;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.2);
-  border: none;
+.time-slider::-webkit-slider-thumb {
+  margin-top: -5px;
+}
+
+.time-slider::-moz-range-track {
+  background: var(--time-gradient) !important;
+  height: 10px;
+  border-radius: 9999px;
+}
+
+.keyboard-hints {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.keyboard-hints span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 </style>
-
-<style>
-.season-slider::-webkit-slider-runnable-track {
-  background: var(--season-gradient) !important;
-}
-
-.season-slider::-moz-range-track {
-  background: var(--season-gradient) !important;
-}
-
-.time-slider::-webkit-slider-runnable-track {
-  background: var(--time-gradient) !important;
-}
-
-.time-slider::-moz-range-track {
-  background: var(--time-gradient) !important;
-}
-</style> 

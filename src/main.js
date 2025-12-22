@@ -4,9 +4,14 @@ import 'bootstrap-icons/font/bootstrap-icons.css'
 import 'bootstrap/dist/js/bootstrap.bundle.min.js'
 import './style.css'
 import App from './App.vue'
-import * as d3 from 'd3';
 
-// Make d3 available globally for our map utilities
-window.d3 = d3;
+// Create and mount the app
+const app = createApp(App)
 
-createApp(App).mount('#app')
+// Global error handler
+app.config.errorHandler = (err, instance, info) => {
+  console.error('Vue Error:', err)
+  // Could send to error tracking service in production
+}
+
+app.mount('#app')

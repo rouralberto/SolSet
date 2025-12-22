@@ -2,7 +2,6 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import autoprefixer from 'autoprefixer'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
   server: {
@@ -10,8 +9,17 @@ export default defineConfig({
       overlay: false
     }
   },
-  // Force clear cache by adding a unique timestamp
-  cacheDir: '.vite-cache-' + Date.now(),
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'leaflet': ['leaflet'],
+          'd3': ['d3'],
+          'suncalc': ['suncalc']
+        }
+      }
+    }
+  },
   css: {
     postcss: {
       plugins: [
