@@ -1,85 +1,101 @@
 <script setup>
-import { ref, watch } from 'vue';
-import { getSavedLocations, removeLocation, getRecentLocations, copyToClipboard, downloadFile } from '../lib/utils';
+import { ref, onMounted, nextTick } from 'vue';
+import { getRecentLocations, clearRecentLocations, downloadFile, formatCoordinates } from '../lib/utils';
+import ToggleSwitch from './ToggleSwitch.vue';
 
 const props = defineProps({
   settings: {
     type: Object,
     required: true
+  },
+  savedLocations: {
+    type: Array,
+    default: () => []
   }
 });
 
-const emit = defineEmits(['update-settings', 'close']);
+const emit = defineEmits(['update-settings', 'select-location', 'remove-location', 'share', 'close']);
 
-// Local copy of settings
-const localSettings = ref({ ...props.settings });
-
-// Saved locations
-const savedLocations = ref(getSavedLocations());
 const recentLocations = ref(getRecentLocations());
-
-// Active tab
 const activeTab = ref('general');
+const panel = ref(null);
 
-// Watch for changes and emit
-watch(localSettings, (newSettings) => {
-  emit('update-settings', newSettings);
-}, { deep: true });
+const tabs = [
+  { id: 'general', label: 'General', icon: 'bi-sliders' },
+  { id: 'locations', label: 'Locations', icon: 'bi-geo-alt' },
+  { id: 'export', label: 'Share & Export', icon: 'bi-box-arrow-up' }
+];
 
-function handleRemoveLocation(id) {
-  savedLocations.value = removeLocation(id);
+const themes = [
+  { id: 'light', label: 'Light', icon: 'bi-sun' },
+  { id: 'dark', label: 'Dark', icon: 'bi-moon' },
+  { id: 'system', label: 'System', icon: 'bi-laptop' }
+];
+
+onMounted(() => panel.value?.focus());
+
+function update(patch) {
+  emit('update-settings', patch);
+}
+
+// Number inputs commit on change (blur/enter) so values aren't clamped mid-typing
+async function updateNumber(key, event) {
+  const input = event.target;
+  update({ [key]: input.value === '' ? null : Number(input.value) });
+  // Reflect the sanitised value back if the input was invalid or out of range
+  await nextTick();
+  input.value = props.settings[key];
+}
+
+function goTo(location) {
+  emit('select-location', { lat: location.lat, lng: location.lng, name: location.name || null });
+  emit('close');
+}
+
+function clearRecent() {
+  recentLocations.value = clearRecentLocations();
 }
 
 function exportData() {
   const data = {
-    settings: localSettings.value,
-    savedLocations: savedLocations.value,
+    settings: props.settings,
+    savedLocations: props.savedLocations,
     exportedAt: new Date().toISOString()
   };
   downloadFile(JSON.stringify(data, null, 2), 'solset-export.json');
-}
-
-async function copyShareLink() {
-  const url = window.location.href;
-  const success = await copyToClipboard(url);
-  if (success) {
-    // Could show a toast here
-  }
 }
 </script>
 
 <template>
   <Teleport to="body">
     <div class="settings-overlay" @click.self="emit('close')">
-      <div class="settings-panel">
+      <div
+        ref="panel"
+        class="settings-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        tabindex="-1"
+      >
         <div class="settings-header">
-          <h2><i class="bi bi-gear me-2"></i>Settings</h2>
-          <button class="solset-btn solset-btn-ghost solset-btn-icon" @click="emit('close')">
+          <h2 id="settings-title"><i class="bi bi-gear"></i>Settings</h2>
+          <button type="button" class="solset-btn solset-btn-ghost solset-btn-icon" @click="emit('close')" aria-label="Close settings">
             <i class="bi bi-x-lg"></i>
           </button>
         </div>
 
-        <div class="settings-tabs">
+        <div class="settings-tabs" role="tablist">
           <button
-            :class="['tab-btn', { active: activeTab === 'general' }]"
-            @click="activeTab = 'general'"
+            v-for="tab in tabs"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :class="['tab-btn', { active: activeTab === tab.id }]"
+            @click="activeTab = tab.id"
           >
-            <i class="bi bi-sliders"></i>
-            General
-          </button>
-          <button
-            :class="['tab-btn', { active: activeTab === 'locations' }]"
-            @click="activeTab = 'locations'"
-          >
-            <i class="bi bi-geo-alt"></i>
-            Locations
-          </button>
-          <button
-            :class="['tab-btn', { active: activeTab === 'export' }]"
-            @click="activeTab = 'export'"
-          >
-            <i class="bi bi-download"></i>
-            Export
+            <i :class="['bi', tab.icon]"></i>
+            {{ tab.label }}
           </button>
         </div>
 
@@ -87,109 +103,107 @@ async function copyShareLink() {
           <!-- General Settings -->
           <div v-if="activeTab === 'general'" class="settings-section">
             <div class="setting-group">
-              <h4>Theme</h4>
+              <h3>Theme</h3>
               <div class="theme-selector">
                 <button
-                  :class="['theme-btn', { active: localSettings.theme === 'light' }]"
-                  @click="localSettings.theme = 'light'"
+                  v-for="theme in themes"
+                  :key="theme.id"
+                  type="button"
+                  :class="['theme-btn', { active: settings.theme === theme.id }]"
+                  :aria-pressed="settings.theme === theme.id"
+                  @click="update({ theme: theme.id })"
                 >
-                  <i class="bi bi-sun"></i>
-                  Light
-                </button>
-                <button
-                  :class="['theme-btn', { active: localSettings.theme === 'dark' }]"
-                  @click="localSettings.theme = 'dark'"
-                >
-                  <i class="bi bi-moon"></i>
-                  Dark
-                </button>
-                <button
-                  :class="['theme-btn', { active: localSettings.theme === 'system' }]"
-                  @click="localSettings.theme = 'system'"
-                >
-                  <i class="bi bi-laptop"></i>
-                  System
+                  <i :class="['bi', theme.icon]"></i>
+                  {{ theme.label }}
                 </button>
               </div>
             </div>
 
             <div class="setting-group">
-              <h4>Shadow Calculation</h4>
-              <label class="setting-row">
-                <span class="setting-label">
-                  Object Height (meters)
-                  <span class="setting-hint">Height of object for shadow length calculation</span>
-                </span>
+              <h3>Shadow Calculation</h3>
+              <div class="setting-row">
+                <label class="setting-label" for="shadow-height">
+                  Object height (m)
+                  <span class="setting-hint">Height of a wall, tree or fence to calculate its shadow length</span>
+                </label>
                 <input
+                  id="shadow-height"
                   type="number"
-                  v-model.number="localSettings.shadowHeight"
-                  min="0.1"
-                  max="100"
-                  step="0.1"
-                  class="solset-input setting-input-small"
-                />
-              </label>
-            </div>
-
-            <div class="setting-group">
-              <h4>Solar Production</h4>
-              <label class="setting-row">
-                <span class="setting-label">
-                  System Size (kW)
-                  <span class="setting-hint">Size of solar panel system for production estimate</span>
-                </span>
-                <input
-                  type="number"
-                  v-model.number="localSettings.solarSystemSize"
+                  :value="settings.shadowHeight"
+                  @change="updateNumber('shadowHeight', $event)"
                   min="0.1"
                   max="1000"
                   step="0.1"
+                  inputmode="decimal"
                   class="solset-input setting-input-small"
                 />
-              </label>
+              </div>
             </div>
 
             <div class="setting-group">
-              <h4>House Layout</h4>
-              <label class="setting-row">
+              <h3>Solar Production</h3>
+              <div class="setting-row">
+                <label class="setting-label" for="system-size">
+                  System size (kW)
+                  <span class="setting-hint">Peak power of the solar panel system for the production estimate</span>
+                </label>
+                <input
+                  id="system-size"
+                  type="number"
+                  :value="settings.solarSystemSize"
+                  @change="updateNumber('solarSystemSize', $event)"
+                  min="0.1"
+                  max="10000"
+                  step="0.1"
+                  inputmode="decimal"
+                  class="solset-input setting-input-small"
+                />
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <h3>House Layout</h3>
+              <div class="setting-row">
                 <span class="setting-label">Show house layout on map</span>
-                <div
-                  class="solset-toggle"
-                  :class="{ active: localSettings.showHouse }"
-                  @click="localSettings.showHouse = !localSettings.showHouse"
-                  role="switch"
-                  :aria-checked="localSettings.showHouse"
-                ></div>
-              </label>
-              <label class="setting-row">
+                <ToggleSwitch
+                  :model-value="settings.showHouse"
+                  @update:model-value="update({ showHouse: $event })"
+                  label="Show house layout on map"
+                />
+              </div>
+              <div class="setting-row">
                 <span class="setting-label">Auto-orient house to optimal position</span>
-                <div
-                  class="solset-toggle"
-                  :class="{ active: localSettings.autoOrientHouse }"
-                  @click="localSettings.autoOrientHouse = !localSettings.autoOrientHouse"
-                  role="switch"
-                  :aria-checked="localSettings.autoOrientHouse"
-                ></div>
-              </label>
+                <ToggleSwitch
+                  :model-value="settings.autoOrientHouse"
+                  @update:model-value="update({ autoOrientHouse: $event })"
+                  label="Auto-orient house to optimal position"
+                />
+              </div>
             </div>
           </div>
 
           <!-- Locations -->
           <div v-if="activeTab === 'locations'" class="settings-section">
             <div class="setting-group">
-              <h4>Saved Locations</h4>
+              <h3>Saved Locations</h3>
               <div v-if="savedLocations.length === 0" class="empty-state">
                 <i class="bi bi-bookmark"></i>
                 <p>No saved locations yet</p>
-                <span class="text-muted">Save locations by clicking the bookmark icon in search results</span>
+                <span class="text-muted">Use the <i class="bi bi-bookmark"></i> button in the Sun Data panel to save the current location.</span>
               </div>
               <div v-else class="locations-list">
                 <div v-for="loc in savedLocations" :key="loc.id" class="location-item">
-                  <div class="location-info">
-                    <span class="location-name">{{ loc.name || 'Unnamed Location' }}</span>
-                    <span class="location-coords">{{ loc.lat.toFixed(4) }}, {{ loc.lng.toFixed(4) }}</span>
-                  </div>
-                  <button class="solset-btn solset-btn-ghost solset-btn-icon" @click="handleRemoveLocation(loc.id)">
+                  <button type="button" class="location-info" @click="goTo(loc)" title="Go to this location">
+                    <span class="location-name">{{ loc.name || 'Unnamed location' }}</span>
+                    <span class="location-coords">{{ formatCoordinates(loc.lat, loc.lng) }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="solset-btn solset-btn-ghost solset-btn-icon"
+                    @click="emit('remove-location', loc.id)"
+                    :aria-label="`Remove ${loc.name || 'location'}`"
+                    title="Remove"
+                  >
                     <i class="bi bi-trash"></i>
                   </button>
                 </div>
@@ -197,37 +211,42 @@ async function copyShareLink() {
             </div>
 
             <div class="setting-group">
-              <h4>Recent Locations</h4>
+              <div class="group-header">
+                <h3>Recent Locations</h3>
+                <button v-if="recentLocations.length" type="button" class="solset-btn solset-btn-ghost link-btn" @click="clearRecent">
+                  Clear
+                </button>
+              </div>
               <div v-if="recentLocations.length === 0" class="empty-state">
                 <i class="bi bi-clock-history"></i>
                 <p>No recent locations</p>
               </div>
               <div v-else class="locations-list">
                 <div v-for="(loc, idx) in recentLocations" :key="idx" class="location-item">
-                  <div class="location-info">
-                    <span class="location-name">{{ loc.name || 'Unnamed Location' }}</span>
-                    <span class="location-coords">{{ loc.lat.toFixed(4) }}, {{ loc.lng.toFixed(4) }}</span>
-                  </div>
+                  <button type="button" class="location-info" @click="goTo(loc)" title="Go to this location">
+                    <span class="location-name">{{ loc.name || formatCoordinates(loc.lat, loc.lng) }}</span>
+                    <span v-if="loc.name" class="location-coords">{{ formatCoordinates(loc.lat, loc.lng) }}</span>
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Export -->
+          <!-- Share & Export -->
           <div v-if="activeTab === 'export'" class="settings-section">
             <div class="setting-group">
-              <h4>Share Current View</h4>
-              <p class="text-muted">Copy the current URL to share this exact view with others.</p>
-              <button class="solset-btn solset-btn-secondary" @click="copyShareLink">
+              <h3>Share Current View</h3>
+              <p class="text-muted">Copy a link to this exact location, date and time.</p>
+              <button type="button" class="solset-btn solset-btn-secondary" @click="emit('share')">
                 <i class="bi bi-link-45deg"></i>
                 Copy Share Link
               </button>
             </div>
 
             <div class="setting-group">
-              <h4>Export Data</h4>
+              <h3>Export Data</h3>
               <p class="text-muted">Download your settings and saved locations as a JSON file.</p>
-              <button class="solset-btn solset-btn-secondary" @click="exportData">
+              <button type="button" class="solset-btn solset-btn-secondary" @click="exportData">
                 <i class="bi bi-download"></i>
                 Export to JSON
               </button>
@@ -242,29 +261,33 @@ async function copyShareLink() {
 <style scoped>
 .settings-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(4px);
-  z-index: 1000;
+  z-index: 2000;
   animation: fade-in 0.2s ease;
 }
 
 .settings-panel {
   width: 520px;
-  max-height: 80vh;
+  max-width: 100%;
+  max-height: min(80vh, 720px);
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   animation: fade-in 0.3s ease;
+}
+
+.settings-panel:focus {
+  outline: none;
 }
 
 .settings-header {
@@ -277,10 +300,12 @@ async function copyShareLink() {
 }
 
 .settings-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0;
 }
 
 .settings-tabs {
@@ -295,7 +320,7 @@ async function copyShareLink() {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 12px 8px;
   font-family: var(--font-display);
   font-size: 13px;
   font-weight: 500;
@@ -305,6 +330,7 @@ async function copyShareLink() {
   border-bottom: 2px solid transparent;
   cursor: pointer;
   transition: all var(--transition-fast);
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -313,7 +339,7 @@ async function copyShareLink() {
 }
 
 .tab-btn.active {
-  color: var(--sun-gold);
+  color: var(--sun-orange);
   border-bottom-color: var(--sun-gold);
   background: var(--bg-secondary);
 }
@@ -330,7 +356,7 @@ async function copyShareLink() {
   gap: 24px;
 }
 
-.setting-group h4 {
+.setting-group h3 {
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
@@ -339,13 +365,28 @@ async function copyShareLink() {
   margin-bottom: 12px;
 }
 
+.setting-group p {
+  margin: 0 0 12px;
+}
+
+.group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.link-btn {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 10px 0;
   border-bottom: 1px solid var(--border-color);
-  cursor: pointer;
 }
 
 .setting-row:last-child {
@@ -366,7 +407,8 @@ async function copyShareLink() {
 }
 
 .setting-input-small {
-  width: 80px;
+  width: 90px;
+  flex-shrink: 0;
   text-align: right;
   padding: 8px 12px;
 }
@@ -399,7 +441,7 @@ async function copyShareLink() {
 
 .theme-btn.active {
   border-color: var(--sun-gold);
-  color: var(--sun-gold);
+  color: var(--sun-orange);
   background: var(--bg-accent);
 }
 
@@ -412,12 +454,12 @@ async function copyShareLink() {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 32px;
+  padding: 24px;
   text-align: center;
   color: var(--text-tertiary);
 }
 
-.empty-state i {
+.empty-state > i {
   font-size: 32px;
 }
 
@@ -437,22 +479,38 @@ async function copyShareLink() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
+  padding-right: 6px;
+  transition: border-color var(--transition-fast);
+}
+
+.location-item:hover {
+  border-color: var(--sun-gold);
 }
 
 .location-info {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-display);
 }
 
 .location-name {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .location-coords {
@@ -460,5 +518,14 @@ async function copyShareLink() {
   font-size: 12px;
   color: var(--text-tertiary);
 }
-</style>
 
+@media (max-width: 480px) {
+  .tab-btn i {
+    display: none;
+  }
+
+  .theme-btn {
+    padding: 12px 8px;
+  }
+}
+</style>

@@ -1,21 +1,38 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
-import { dateToDayOfYear, dayOfYearToDate, getSunTimes } from '../lib/sunCalc';
-import { getApproximateTimezone } from '../lib/utils';
+import { ref, computed, nextTick } from 'vue';
+import { getSunPosition } from '../lib/sunCalc';
+import {
+  dayOfYear, dateStringFromDayOfYear, daysInYear, getYear, formatDisplayDate,
+  formatMinutes, parseMinutes, toZonedMinutes, isValidDate, isValidDateString,
+  getTimeZoneOffset, formatUtcOffset
+} from '../lib/time';
 
-// Props
 const props = defineProps({
-  currentDate: {
-    type: Date,
-    default: () => new Date()
+  // Wall-clock date in the location's time zone, 'YYYY-MM-DD'
+  localDate: {
+    type: String,
+    required: true
   },
-  currentTime: {
+  // Wall-clock minutes since midnight in the location's time zone
+  minutes: {
+    type: Number,
+    required: true
+  },
+  instant: {
     type: Date,
-    default: () => new Date()
+    required: true
+  },
+  timeZone: {
+    type: String,
+    required: true
+  },
+  sunTimes: {
+    type: Object,
+    required: true
   },
   coordinates: {
     type: Object,
-    default: () => ({ lat: 0, lng: 0 })
+    required: true
   },
   isAnimating: {
     type: Boolean,
@@ -23,242 +40,138 @@ const props = defineProps({
   }
 });
 
-// Emit events
-const emit = defineEmits(['update-date', 'update-time', 'toggle-animation']);
+const emit = defineEmits(['update:localDate', 'update:minutes', 'now', 'toggle-animation']);
 
-// State
-const dayOfYear = ref(dateToDayOfYear(props.currentDate));
 const showDateInput = ref(false);
 const showTimeInput = ref(false);
 const dateInputValue = ref('');
 const timeInputValue = ref('');
+const dateInput = ref(null);
+const timeInput = ref(null);
 
-// Maximum day based on leap year
-const maxDay = computed(() => {
-  const year = props.currentDate.getFullYear();
-  return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365;
+const year = computed(() => getYear(props.localDate));
+const maxDay = computed(() => daysInYear(year.value));
+const currentDay = computed(() => dayOfYear(props.localDate));
+
+const timeZoneLabel = computed(() => {
+  const offset = formatUtcOffset(getTimeZoneOffset(props.instant, props.timeZone));
+  const name = props.timeZone.startsWith('Etc/') || props.timeZone === 'UTC'
+    ? 'Ocean / no local zone'
+    : props.timeZone.split('/').pop().replace(/_/g, ' ');
+  return `${name} · ${offset}`;
 });
 
-// Timezone offset based on longitude
-const locationTimezoneOffset = computed(() => {
-  return getApproximateTimezone(props.coordinates.lng);
-});
+const percent = (value, total) => `${((value / total) * 100).toFixed(2)}%`;
 
-// Convert time to minutes since midnight
-const totalMinutes = ref(0);
+// Month markers positioned where each month starts
+const monthMarkers = computed(() =>
+  [['Jan', 1], ['Apr', 4], ['Jul', 7], ['Oct', 10]].map(([label, month]) => ({
+    label,
+    left: percent(dayOfYear(`${year.value}-${String(month).padStart(2, '0')}-01`) - 1, maxDay.value - 1)
+  }))
+);
 
-// Get sun times for the current location
-const sunTimes = computed(() => {
-  return getSunTimes(props.currentDate, props.coordinates.lat, props.coordinates.lng);
-});
+const hourMarkers = ['00:00', '06:00', '12:00', '18:00', '24:00'];
 
-// Convert sun times to minutes for gradient
-const sunTimesInMinutes = computed(() => {
-  const times = sunTimes.value;
-
-  const getMinutesSinceMidnight = (date) => {
-    if (!date || isNaN(date.getTime())) return null;
-
-    const utcHours = date.getUTCHours();
-    const utcMinutes = date.getUTCMinutes();
-
-    let locationHours = (utcHours + locationTimezoneOffset.value) % 24;
-    if (locationHours < 0) locationHours += 24;
-
-    return locationHours * 60 + utcMinutes;
-  };
-
-  return {
-    dawn: getMinutesSinceMidnight(times.dawn),
-    sunrise: getMinutesSinceMidnight(times.sunrise),
-    sunriseEnd: getMinutesSinceMidnight(times.sunriseEnd),
-    solarNoon: getMinutesSinceMidnight(times.solarNoon),
-    sunsetStart: getMinutesSinceMidnight(times.sunsetStart),
-    sunset: getMinutesSinceMidnight(times.sunset),
-    dusk: getMinutesSinceMidnight(times.dusk),
-    night: getMinutesSinceMidnight(times.night)
-  };
-});
-
-// Season gradient style
+// Season gradient for the date slider (hemisphere aware)
 const seasonGradientStyle = computed(() => {
-  const year = props.currentDate.getFullYear();
   const isNorthernHemisphere = props.coordinates.lat >= 0;
+  const p = (dateString) => percent(dayOfYear(`${year.value}-${dateString}`), maxDay.value);
+  const [mar, jun, sep, dec] = [p('03-20'), p('06-21'), p('09-22'), p('12-21')];
 
-  const springEquinox = dateToDayOfYear(new Date(year, 2, 20));
-  const summerSolstice = dateToDayOfYear(new Date(year, 5, 21));
-  const fallEquinox = dateToDayOfYear(new Date(year, 8, 22));
-  const winterSolstice = dateToDayOfYear(new Date(year, 11, 21));
+  const [winter, spring, summer, fall] = ['#60a5fa', '#34d399', '#fbbf24', '#f97316'];
+  const sequence = isNorthernHemisphere
+    ? [winter, spring, summer, fall, winter]
+    : [summer, fall, winter, spring, summer];
 
-  const getPercent = (day) => ((day / maxDay.value) * 100).toFixed(1) + '%';
+  const gradient = `linear-gradient(to right,
+    ${sequence[0]} 0%, ${sequence[0]} ${mar},
+    ${sequence[1]} ${mar}, ${sequence[1]} ${jun},
+    ${sequence[2]} ${jun}, ${sequence[2]} ${sep},
+    ${sequence[3]} ${sep}, ${sequence[3]} ${dec},
+    ${sequence[4]} ${dec}, ${sequence[4]} 100%)`;
 
-  const gradientValue = isNorthernHemisphere ?
-    `linear-gradient(to right,
-      #60a5fa 0%,
-      #60a5fa ${getPercent(springEquinox)},
-      #34d399 ${getPercent(springEquinox)},
-      #34d399 ${getPercent(summerSolstice)},
-      #fbbf24 ${getPercent(summerSolstice)},
-      #fbbf24 ${getPercent(fallEquinox)},
-      #f97316 ${getPercent(fallEquinox)},
-      #f97316 ${getPercent(winterSolstice)},
-      #60a5fa ${getPercent(winterSolstice)},
-      #60a5fa 100%
-    )` :
-    `linear-gradient(to right,
-      #fbbf24 0%,
-      #fbbf24 ${getPercent(springEquinox)},
-      #f97316 ${getPercent(springEquinox)},
-      #f97316 ${getPercent(summerSolstice)},
-      #60a5fa ${getPercent(summerSolstice)},
-      #60a5fa ${getPercent(fallEquinox)},
-      #34d399 ${getPercent(fallEquinox)},
-      #34d399 ${getPercent(winterSolstice)},
-      #fbbf24 ${getPercent(winterSolstice)},
-      #fbbf24 100%
-    )`;
-
-  return { '--season-gradient': gradientValue };
+  return { '--season-gradient': gradient };
 });
 
-// Time gradient style
+// Day/night gradient for the time slider, in the location's time zone
 const timeGradientStyle = computed(() => {
-  const times = sunTimesInMinutes.value;
+  const times = props.sunTimes;
+  const toMinutes = (date) => (isValidDate(date) ? toZonedMinutes(date, props.timeZone) : null);
+  const noon = toMinutes(times.solarNoon);
+  const night = '#1e3a5f';
+  const twilight = '#7c3aed';
 
-  if (!times.sunrise || !times.sunset) {
-    return { '--time-gradient': 'var(--bg-tertiary)' };
+  if (toMinutes(times.sunrise) === null || toMinutes(times.sunset) === null) {
+    const { lat, lng } = props.coordinates;
+    const polarDay = getSunPosition(times.solarNoon, lat, lng).altitude > 0;
+    const gradient = polarDay
+      ? 'linear-gradient(to right, #7dd3fc, #0ea5e9 50%, #7dd3fc)'
+      : `linear-gradient(to right, ${night}, ${twilight} 50%, ${night})`;
+    return { '--time-gradient': gradient };
   }
 
-  const getPercent = (minutes) => ((minutes / 1440) * 100).toFixed(1) + '%';
+  // Keep stops ordered around solar noon even if twilight crosses midnight
+  const stop = (date, beforeNoon) => {
+    let m = toMinutes(date);
+    if (m === null) return null;
+    if (beforeNoon && m > noon) m -= 1440;
+    if (!beforeNoon && m < noon) m += 1440;
+    return percent(m, 1440);
+  };
 
-  const gradientValue = `linear-gradient(to right,
-    #1e3a5f 0%,
-    #1e3a5f ${getPercent(times.dawn || 360)},
-    #7c3aed ${getPercent(times.dawn || 360)},
-    #f59e0b ${getPercent(times.sunrise || 400)},
-    #7dd3fc ${getPercent(times.sunriseEnd || 420)},
-    #0ea5e9 ${getPercent(times.solarNoon || 720)},
-    #7dd3fc ${getPercent(times.sunsetStart || 1020)},
-    #f59e0b ${getPercent(times.sunset || 1040)},
-    #7c3aed ${getPercent(times.dusk || 1080)},
-    #1e3a5f ${getPercent(times.night || 1140)},
-    #1e3a5f 100%
-  )`;
+  const stops = [
+    [night, '0%'],
+    [night, stop(times.dawn, true)],
+    [twilight, stop(times.dawn, true)],
+    ['#f59e0b', stop(times.sunrise, true)],
+    ['#7dd3fc', stop(times.sunriseEnd, true)],
+    ['#0ea5e9', percent(noon, 1440)],
+    ['#7dd3fc', stop(times.sunsetStart, false)],
+    ['#f59e0b', stop(times.sunset, false)],
+    [twilight, stop(times.dusk, false)],
+    [night, stop(times.night, false)],
+    [night, '100%']
+  ].filter(([, position]) => position !== null);
 
-  return { '--time-gradient': gradientValue };
+  return { '--time-gradient': `linear-gradient(to right, ${stops.map(s => s.join(' ')).join(', ')})` };
 });
 
-// Watch for external date changes
-watch(() => props.currentDate, (newDate) => {
-  dayOfYear.value = dateToDayOfYear(newDate);
-}, { deep: true });
-
-// Update minutes when time or coordinates change
-watch([() => props.currentTime, () => props.coordinates], () => {
-  const utcHours = props.currentTime.getUTCHours();
-  const utcMinutes = props.currentTime.getUTCMinutes();
-
-  let locationHours = (utcHours + locationTimezoneOffset.value) % 24;
-  if (locationHours < 0) locationHours += 24;
-
-  totalMinutes.value = locationHours * 60 + utcMinutes;
-}, { immediate: true });
-
-// Format date
-function formatDate(day) {
-  const date = dayOfYearToDate(day, props.currentDate.getFullYear());
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+function handleDateSlider(event) {
+  emit('update:localDate', dateStringFromDayOfYear(year.value, Number(event.target.value)));
 }
 
-// Format time
-function formatTime(minutes) {
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+function handleTimeSlider(event) {
+  emit('update:minutes', Number(event.target.value));
 }
 
-// Handle date slider
-function handleDateSliderChange(event) {
-  const day = parseInt(event.target.value);
-  const newDate = dayOfYearToDate(day, props.currentDate.getFullYear());
-  dayOfYear.value = day;
-  emit('update-date', newDate);
-}
-
-// Handle time slider
-function handleTimeSliderChange(event) {
-  const minutes = parseInt(event.target.value);
-  totalMinutes.value = minutes;
-
-  const utcDate = new Date(props.currentTime);
-  utcDate.setUTCHours(0, 0, 0, 0);
-
-  const locationHours = Math.floor(minutes / 60);
-  const locationMinutes = minutes % 60;
-
-  let utcHours = (locationHours - locationTimezoneOffset.value);
-  if (utcHours < 0) utcHours += 24;
-  if (utcHours >= 24) utcHours -= 24;
-
-  utcDate.setUTCHours(utcHours, locationMinutes, 0, 0);
-
-  emit('update-time', new Date(utcDate));
-}
-
-// Set to now
-function setNow() {
-  const now = new Date();
-
-  dayOfYear.value = dateToDayOfYear(now);
-  emit('update-date', now);
-
-  const utcHours = now.getUTCHours();
-  const utcMinutes = now.getUTCMinutes();
-
-  let locationHours = (utcHours + locationTimezoneOffset.value) % 24;
-  if (locationHours < 0) locationHours += 24;
-
-  totalMinutes.value = locationHours * 60 + utcMinutes;
-  emit('update-time', now);
-}
-
-// Direct date input
-function openDateInput() {
-  const date = dayOfYearToDate(dayOfYear.value, props.currentDate.getFullYear());
-  dateInputValue.value = date.toISOString().split('T')[0];
+async function openDateInput() {
+  dateInputValue.value = props.localDate;
   showDateInput.value = true;
+  await nextTick();
+  dateInput.value?.focus();
 }
 
-function handleDateInput() {
-  const newDate = new Date(dateInputValue.value);
-  if (!isNaN(newDate.getTime())) {
-    dayOfYear.value = dateToDayOfYear(newDate);
-    emit('update-date', newDate);
+function commitDateInput() {
+  if (!showDateInput.value) return;
+  if (isValidDateString(dateInputValue.value)) {
+    emit('update:localDate', dateInputValue.value);
   }
   showDateInput.value = false;
 }
 
-// Direct time input
-function openTimeInput() {
-  timeInputValue.value = formatTime(totalMinutes.value);
+async function openTimeInput() {
+  timeInputValue.value = formatMinutes(props.minutes);
   showTimeInput.value = true;
+  await nextTick();
+  timeInput.value?.focus();
 }
 
-function handleTimeInput() {
-  const [hours, mins] = timeInputValue.value.split(':').map(Number);
-  if (!isNaN(hours) && !isNaN(mins)) {
-    const minutes = hours * 60 + mins;
-    totalMinutes.value = minutes;
-
-    const utcDate = new Date(props.currentTime);
-    utcDate.setUTCHours(0, 0, 0, 0);
-
-    let utcHours = (hours - locationTimezoneOffset.value);
-    if (utcHours < 0) utcHours += 24;
-    if (utcHours >= 24) utcHours -= 24;
-
-    utcDate.setUTCHours(utcHours, mins, 0, 0);
-    emit('update-time', new Date(utcDate));
+function commitTimeInput() {
+  if (!showTimeInput.value) return;
+  const minutes = parseMinutes(timeInputValue.value);
+  if (minutes !== null) {
+    emit('update:minutes', minutes);
   }
   showTimeInput.value = false;
 }
@@ -267,20 +180,23 @@ function handleTimeInput() {
 <template>
   <div class="solset-card datetime-card">
     <div class="solset-card-header">
-      <h5><i class="bi bi-clock-history me-2"></i>Date & Time</h5>
+      <h2 class="card-title"><i class="bi bi-clock-history"></i>Date &amp; Time</h2>
       <div class="header-actions">
         <button
-          class="solset-btn solset-btn-ghost solset-btn-icon"
-          :class="{ 'animate-glow': isAnimating }"
+          type="button"
+          class="solset-btn solset-btn-secondary btn-sm"
+          :class="{ 'is-playing': isAnimating }"
           @click="emit('toggle-animation')"
-          :aria-label="isAnimating ? 'Stop animation' : 'Start animation'"
-          :title="isAnimating ? 'Stop (Space)' : 'Animate (Space)'"
+          :aria-pressed="isAnimating"
+          :title="isAnimating ? 'Pause (Space)' : 'Play through the day (Space)'"
         >
           <i :class="isAnimating ? 'bi bi-pause-fill' : 'bi bi-play-fill'"></i>
+          {{ isAnimating ? 'Pause' : 'Play' }}
         </button>
         <button
+          type="button"
           class="solset-btn solset-btn-primary btn-sm"
-          @click="setNow"
+          @click="emit('now')"
           title="Jump to now (N)"
         >
           <i class="bi bi-clock"></i>
@@ -293,40 +209,44 @@ function handleTimeInput() {
       <!-- Date Section -->
       <div class="slider-section">
         <div class="slider-header">
-          <span class="slider-label">Date</span>
+          <label class="slider-label" for="date-slider">Date</label>
           <button
             v-if="!showDateInput"
+            type="button"
             class="value-badge"
             @click="openDateInput"
-            title="Click to edit"
+            title="Click to type a date"
           >
-            {{ formatDate(dayOfYear) }}
+            {{ formatDisplayDate(localDate) }}
+            <i class="bi bi-pencil"></i>
           </button>
           <input
             v-else
+            ref="dateInput"
             type="date"
             v-model="dateInputValue"
-            @blur="handleDateInput"
-            @keyup.enter="handleDateInput"
+            @blur="commitDateInput"
+            @keydown.enter.prevent="commitDateInput"
+            @keydown.esc.stop="showDateInput = false"
             class="solset-input date-input"
-            autofocus
+            aria-label="Date"
           />
         </div>
         <div class="slider-container">
           <input
+            id="date-slider"
             type="range"
             class="solset-slider season-slider"
-            :min="1"
+            min="1"
             :max="maxDay"
-            v-model="dayOfYear"
-            @input="handleDateSliderChange"
+            :value="currentDay"
+            @input="handleDateSlider"
             :style="seasonGradientStyle"
-            aria-label="Date slider"
+            :aria-valuetext="formatDisplayDate(localDate)"
           />
           <div class="slider-markers">
-            <span>Jan</span>
-            <span>Jul</span>
-            <span>Dec</span>
+            <span v-for="m in monthMarkers" :key="m.label" :style="{ left: m.left }">{{ m.label }}</span>
+            <span class="end">Dec</span>
           </div>
         </div>
       </div>
@@ -334,59 +254,67 @@ function handleTimeInput() {
       <!-- Time Section -->
       <div class="slider-section">
         <div class="slider-header">
-          <span class="slider-label">Time</span>
+          <label class="slider-label" for="time-slider">Time</label>
           <button
             v-if="!showTimeInput"
+            type="button"
             class="value-badge mono"
             @click="openTimeInput"
-            title="Click to edit"
+            title="Click to type a time"
           >
-            {{ formatTime(totalMinutes) }}
+            {{ formatMinutes(minutes) }}
+            <i class="bi bi-pencil"></i>
           </button>
           <input
             v-else
+            ref="timeInput"
             type="time"
             v-model="timeInputValue"
-            @blur="handleTimeInput"
-            @keyup.enter="handleTimeInput"
+            @blur="commitTimeInput"
+            @keydown.enter.prevent="commitTimeInput"
+            @keydown.esc.stop="showTimeInput = false"
             class="solset-input time-input"
-            autofocus
+            aria-label="Time"
           />
         </div>
         <div class="slider-container">
           <input
+            id="time-slider"
             type="range"
             class="solset-slider time-slider"
             min="0"
             max="1439"
             step="5"
-            v-model="totalMinutes"
-            @input="handleTimeSliderChange"
+            :value="minutes"
+            @input="handleTimeSlider"
             :style="timeGradientStyle"
-            aria-label="Time slider"
+            :aria-valuetext="formatMinutes(minutes)"
           />
           <div class="slider-markers">
-            <span>00:00</span>
-            <span>12:00</span>
-            <span>24:00</span>
+            <span
+              v-for="(h, i) in hourMarkers"
+              :key="h"
+              :style="{ left: `${i * 25}%` }"
+              :class="{ end: i === hourMarkers.length - 1 }"
+            >{{ h }}</span>
           </div>
+        </div>
+        <div class="timezone-label" :title="timeZone">
+          <i class="bi bi-globe2"></i>
+          Local time: {{ timeZoneLabel }}
         </div>
       </div>
 
       <!-- Keyboard Hints -->
       <div class="keyboard-hints">
-        <span><span class="kbd">←</span><span class="kbd">→</span> ±15min</span>
-        <span><span class="kbd">⇧</span>+<span class="kbd">←</span><span class="kbd">→</span> ±1day</span>
+        <span><span class="kbd">←</span><span class="kbd">→</span> ±15 min</span>
+        <span><span class="kbd">⇧</span>+<span class="kbd">←</span><span class="kbd">→</span> ±1 day</span>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.datetime-card {
-  overflow: visible;
-}
-
 .header-actions {
   display: flex;
   align-items: center;
@@ -398,12 +326,13 @@ function handleTimeInput() {
   font-size: 12px;
 }
 
-.slider-section {
-  margin-bottom: 20px;
+.is-playing {
+  border-color: var(--sun-gold);
+  color: var(--sun-orange);
 }
 
-.slider-section:last-of-type {
-  margin-bottom: 12px;
+.slider-section {
+  margin-bottom: 20px;
 }
 
 .slider-header {
@@ -424,6 +353,7 @@ function handleTimeInput() {
 .value-badge {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   padding: 4px 12px;
   font-family: var(--font-display);
   font-size: 14px;
@@ -434,6 +364,11 @@ function handleTimeInput() {
   border-radius: var(--radius-full);
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+.value-badge i {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .value-badge:hover {
@@ -458,57 +393,59 @@ function handleTimeInput() {
 }
 
 .slider-markers {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 2px 0;
+  position: relative;
+  height: 18px;
+  margin-top: 4px;
   font-size: 10px;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
 }
 
+.slider-markers span {
+  position: absolute;
+  top: 0;
+}
+
+.slider-markers span:not(:first-child):not(.end) {
+  transform: translateX(-50%);
+}
+
+.slider-markers span.end {
+  left: auto !important;
+  right: 0;
+}
+
+.timezone-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* Custom Slider Track Styling */
-.season-slider,
-.time-slider {
-  height: 10px;
-}
-
 .season-slider::-webkit-slider-runnable-track {
-  background: var(--season-gradient) !important;
-  height: 10px;
-  border-radius: 9999px;
-}
-
-.season-slider::-webkit-slider-thumb {
-  margin-top: -5px;
+  background: var(--season-gradient);
 }
 
 .season-slider::-moz-range-track {
-  background: var(--season-gradient) !important;
-  height: 10px;
-  border-radius: 9999px;
+  background: var(--season-gradient);
 }
 
 .time-slider::-webkit-slider-runnable-track {
-  background: var(--time-gradient) !important;
-  height: 10px;
-  border-radius: 9999px;
-}
-
-.time-slider::-webkit-slider-thumb {
-  margin-top: -5px;
+  background: var(--time-gradient);
 }
 
 .time-slider::-moz-range-track {
-  background: var(--time-gradient) !important;
-  height: 10px;
-  border-radius: 9999px;
+  background: var(--time-gradient);
 }
 
 .keyboard-hints {
   display: flex;
   justify-content: center;
   gap: 16px;
-  padding-top: 8px;
+  padding-top: 12px;
   border-top: 1px solid var(--border-color);
   font-size: 11px;
   color: var(--text-tertiary);
@@ -518,5 +455,11 @@ function handleTimeInput() {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+@media (hover: none) {
+  .keyboard-hints {
+    display: none;
+  }
 }
 </style>

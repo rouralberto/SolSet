@@ -1,3 +1,5 @@
+import { isValidDateString, parseMinutes, formatMinutes } from './time';
+
 /**
  * Debounce function - delays execution until after wait ms have elapsed since last call
  * @param {Function} func - Function to debounce
@@ -7,111 +9,63 @@
 export function debounce(func, wait) {
   let timeout;
   return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
     clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
+    timeout = setTimeout(() => func(...args), wait);
   };
 }
 
-/**
- * Throttle function - limits execution to once per wait ms
- * @param {Function} func - Function to throttle
- * @param {number} wait - Milliseconds to wait between executions
- * @returns {Function} Throttled function
- */
-export function throttle(func, wait) {
-  let lastTime = 0;
-  return function executedFunction(...args) {
-    const now = Date.now();
-    if (now - lastTime >= wait) {
-      lastTime = now;
-      func(...args);
-    }
-  };
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 /**
- * Combine date and time into a single Date object
- * @param {Date} date - The date part
- * @param {Date} time - The time part
- * @returns {Date} Combined date and time
+ * Parse URL hash params for state persistence.
+ * Date and time are wall-clock values in the location's time zone.
+ * @returns {Object} Parsed parameters (only the valid ones)
  */
-export function combineDateAndTime(date, time) {
-  const result = new Date(date);
-  if (time) {
-    result.setHours(time.getHours(), time.getMinutes(), 0, 0);
+export function parseUrlParams() {
+  const hash = window.location.hash.slice(1);
+  const result = {};
+  if (!hash) return result;
+
+  const params = new URLSearchParams(hash);
+
+  const lat = parseFloat(params.get('lat'));
+  const lng = parseFloat(params.get('lng'));
+  if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+    result.coordinates = { lat, lng };
   }
+
+  const zoom = parseFloat(params.get('z'));
+  if (Number.isFinite(zoom)) {
+    result.zoom = clamp(zoom, 2, 19);
+  }
+
+  const date = params.get('date');
+  if (date && isValidDateString(date)) {
+    result.date = date;
+  }
+
+  const minutes = parseMinutes(params.get('time') || '');
+  if (minutes !== null) {
+    result.minutes = minutes;
+  }
+
   return result;
 }
 
 /**
- * Parse URL hash params for state persistence
- * @returns {Object} Parsed parameters
- */
-export function parseUrlParams() {
-  const hash = window.location.hash.slice(1);
-  if (!hash) return null;
-
-  try {
-    const params = new URLSearchParams(hash);
-    const result = {};
-
-    if (params.has('lat') && params.has('lng')) {
-      result.coordinates = {
-        lat: parseFloat(params.get('lat')),
-        lng: parseFloat(params.get('lng'))
-      };
-    }
-
-    if (params.has('date')) {
-      result.date = new Date(params.get('date'));
-    }
-
-    if (params.has('time')) {
-      const [hours, minutes] = params.get('time').split(':').map(Number);
-      const time = new Date();
-      time.setHours(hours, minutes, 0, 0);
-      result.time = time;
-    }
-
-    if (params.has('theme')) {
-      result.theme = params.get('theme');
-    }
-
-    return Object.keys(result).length > 0 ? result : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
  * Update URL hash with current state
- * @param {Object} state - State to persist
+ * @param {Object} state - { coordinates, zoom, date, minutes }
  */
 export function updateUrlParams(state) {
   const params = new URLSearchParams();
 
-  if (state.coordinates) {
-    params.set('lat', state.coordinates.lat.toFixed(6));
-    params.set('lng', state.coordinates.lng.toFixed(6));
-  }
-
-  if (state.date) {
-    params.set('date', state.date.toISOString().split('T')[0]);
-  }
-
-  if (state.time) {
-    const hours = state.time.getHours().toString().padStart(2, '0');
-    const minutes = state.time.getMinutes().toString().padStart(2, '0');
-    params.set('time', `${hours}:${minutes}`);
-  }
-
-  if (state.theme) {
-    params.set('theme', state.theme);
-  }
+  params.set('lat', state.coordinates.lat.toFixed(6));
+  params.set('lng', state.coordinates.lng.toFixed(6));
+  if (Number.isFinite(state.zoom)) params.set('z', String(Math.round(state.zoom)));
+  params.set('date', state.date);
+  params.set('time', formatMinutes(state.minutes));
 
   const newHash = params.toString();
   if (window.location.hash.slice(1) !== newHash) {
@@ -120,35 +74,56 @@ export function updateUrlParams(state) {
 }
 
 /**
- * Local storage helper for saved locations
+ * Local storage helpers. Storage can be unavailable (private mode, blocked
+ * cookies), so every access is guarded.
  */
 const SAVED_LOCATIONS_KEY = 'solset_saved_locations';
 const RECENT_LOCATIONS_KEY = 'solset_recent_locations';
 const MAX_RECENT_LOCATIONS = 10;
 const SETTINGS_KEY = 'solset_settings';
 
-export function getSavedLocations() {
+function readJson(key, fallback) {
   try {
-    const stored = localStorage.getItem(SAVED_LOCATIONS_KEY);
-    return stored ? JSON.parse(stored) : [];
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : fallback;
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+function writeJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage full or unavailable; state still works for this session
+  }
+}
+
+export function isSameLocation(a, b, tolerance = 0.0001) {
+  return Math.abs(a.lat - b.lat) < tolerance && Math.abs(a.lng - b.lng) < tolerance;
+}
+
+function isValidLocation(location) {
+  return location && Number.isFinite(location.lat) && Number.isFinite(location.lng);
+}
+
+export function getSavedLocations() {
+  const locations = readJson(SAVED_LOCATIONS_KEY, []);
+  return Array.isArray(locations) ? locations.filter(isValidLocation) : [];
 }
 
 export function saveLocation(location) {
   const locations = getSavedLocations();
-  const exists = locations.some(
-    l => l.lat === location.lat && l.lng === location.lng
-  );
 
-  if (!exists) {
+  if (!locations.some(l => isSameLocation(l, location))) {
     locations.push({
-      ...location,
+      lat: location.lat,
+      lng: location.lng,
+      name: location.name || null,
       id: Date.now(),
       savedAt: new Date().toISOString()
     });
-    localStorage.setItem(SAVED_LOCATIONS_KEY, JSON.stringify(locations));
+    writeJson(SAVED_LOCATIONS_KEY, locations);
   }
 
   return locations;
@@ -156,47 +131,28 @@ export function saveLocation(location) {
 
 export function removeLocation(id) {
   const locations = getSavedLocations().filter(l => l.id !== id);
-  localStorage.setItem(SAVED_LOCATIONS_KEY, JSON.stringify(locations));
+  writeJson(SAVED_LOCATIONS_KEY, locations);
   return locations;
 }
 
 export function getRecentLocations() {
-  try {
-    const stored = localStorage.getItem(RECENT_LOCATIONS_KEY);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
+  const locations = readJson(RECENT_LOCATIONS_KEY, []);
+  return Array.isArray(locations) ? locations.filter(isValidLocation) : [];
 }
 
 export function addRecentLocation(location) {
-  let locations = getRecentLocations();
+  const locations = [
+    { lat: location.lat, lng: location.lng, name: location.name || null, visitedAt: new Date().toISOString() },
+    ...getRecentLocations().filter(l => !isSameLocation(l, location))
+  ].slice(0, MAX_RECENT_LOCATIONS);
 
-  // Remove if already exists (we'll add it to the front)
-  locations = locations.filter(
-    l => !(Math.abs(l.lat - location.lat) < 0.0001 && Math.abs(l.lng - location.lng) < 0.0001)
-  );
-
-  // Add to front
-  locations.unshift({
-    ...location,
-    visitedAt: new Date().toISOString()
-  });
-
-  // Limit size
-  locations = locations.slice(0, MAX_RECENT_LOCATIONS);
-
-  localStorage.setItem(RECENT_LOCATIONS_KEY, JSON.stringify(locations));
+  writeJson(RECENT_LOCATIONS_KEY, locations);
   return locations;
 }
 
-export function getSettings() {
-  try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    return stored ? JSON.parse(stored) : getDefaultSettings();
-  } catch {
-    return getDefaultSettings();
-  }
+export function clearRecentLocations() {
+  writeJson(RECENT_LOCATIONS_KEY, []);
+  return [];
 }
 
 export function getDefaultSettings() {
@@ -205,12 +161,43 @@ export function getDefaultSettings() {
     shadowHeight: 1,
     solarSystemSize: 6.7,
     showHouse: true,
-    autoOrientHouse: true
+    autoOrientHouse: true,
+    houseOrientation: 180,
+    showSeasonalPaths: false
   };
 }
 
+/**
+ * Validate settings, falling back to defaults for anything missing or invalid
+ * @param {Object} settings - Possibly partial or malformed settings
+ * @returns {Object} Complete, valid settings
+ */
+export function sanitizeSettings(settings) {
+  const defaults = getDefaultSettings();
+  const s = settings && typeof settings === 'object' ? settings : {};
+  const number = (value, min, max, fallback) => {
+    const n = Number(value);
+    return value !== '' && value !== null && Number.isFinite(n) ? clamp(n, min, max) : fallback;
+  };
+  const bool = (value, fallback) => (typeof value === 'boolean' ? value : fallback);
+
+  return {
+    theme: ['light', 'dark', 'system'].includes(s.theme) ? s.theme : defaults.theme,
+    shadowHeight: number(s.shadowHeight, 0.1, 1000, defaults.shadowHeight),
+    solarSystemSize: number(s.solarSystemSize, 0.1, 10000, defaults.solarSystemSize),
+    showHouse: bool(s.showHouse, defaults.showHouse),
+    autoOrientHouse: bool(s.autoOrientHouse, defaults.autoOrientHouse),
+    houseOrientation: ((Math.round(number(s.houseOrientation, -360, 720, defaults.houseOrientation)) % 360) + 360) % 360,
+    showSeasonalPaths: bool(s.showSeasonalPaths, defaults.showSeasonalPaths)
+  };
+}
+
+export function getSettings() {
+  return sanitizeSettings(readJson(SETTINGS_KEY, {}));
+}
+
 export function saveSettings(settings) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  writeJson(SETTINGS_KEY, settings);
 }
 
 /**
@@ -224,15 +211,6 @@ export function formatCoordinates(lat, lng, precision = 4) {
   const latDir = lat >= 0 ? 'N' : 'S';
   const lngDir = lng >= 0 ? 'E' : 'W';
   return `${Math.abs(lat).toFixed(precision)}°${latDir}, ${Math.abs(lng).toFixed(precision)}°${lngDir}`;
-}
-
-/**
- * Calculate timezone offset based on longitude (rough approximation)
- * @param {number} lng - Longitude
- * @returns {number} Offset in hours from UTC
- */
-export function getApproximateTimezone(lng) {
-  return Math.round(lng / 15);
 }
 
 /**
@@ -253,8 +231,7 @@ export async function copyToClipboard(text) {
     document.body.appendChild(textarea);
     textarea.select();
     try {
-      document.execCommand('copy');
-      return true;
+      return document.execCommand('copy');
     } catch {
       return false;
     } finally {
@@ -280,4 +257,3 @@ export function downloadFile(data, filename, type = 'application/json') {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
-

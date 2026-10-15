@@ -1,25 +1,44 @@
 <script setup>
-import { computed } from 'vue';
-import { getSunTimes, getSunPosition, formatTime, calculateShadowLength } from '../lib/sunCalc';
-import { combineDateAndTime, copyToClipboard } from '../lib/utils';
+import { ref, computed } from 'vue';
+import {
+  getSunPosition, isSunAboveHorizon, calculateShadowLength, azimuthToBearing, bearingToCompass, estimateAnnualSolarYield
+} from '../lib/sunCalc';
+import { formatZonedTime, formatMinutes, formatDisplayDate, isValidDate } from '../lib/time';
+import { copyToClipboard, formatCoordinates } from '../lib/utils';
+import { showToast } from '../lib/toast';
 
-// Props
 const props = defineProps({
   coordinates: {
     type: Object,
     required: true
   },
-  date: {
-    type: Date,
-    required: true
+  locationName: {
+    type: String,
+    default: null
   },
-  time: {
-    type: Date,
-    required: true
-  },
-  houseOrientation: {
+  sunPosition: {
     type: Object,
-    default: () => ({ angle: 0, label: '0° (N)' })
+    required: true
+  },
+  sunTimes: {
+    type: Object,
+    required: true
+  },
+  timeZone: {
+    type: String,
+    required: true
+  },
+  localDate: {
+    type: String,
+    required: true
+  },
+  minutes: {
+    type: Number,
+    required: true
+  },
+  isSaved: {
+    type: Boolean,
+    default: false
   },
   shadowHeight: {
     type: Number,
@@ -31,190 +50,152 @@ const props = defineProps({
   }
 });
 
-// Combined date and time
-const dateTime = computed(() => combineDateAndTime(props.date, props.time));
+const emit = defineEmits(['toggle-save']);
 
-// Sun position
-const position = computed(() => {
-  if (!props.coordinates.lat || !props.coordinates.lng) {
-    return { azimuth: 0, altitude: 0 };
-  }
-  return getSunPosition(dateTime.value, props.coordinates.lat, props.coordinates.lng);
+const copied = ref(false);
+
+const toDegrees = (radians) => radians * (180 / Math.PI);
+
+const bearing = computed(() => azimuthToBearing(props.sunPosition.azimuth));
+const azimuthLabel = computed(() => bearing.value.toFixed(1));
+const azimuthDirection = computed(() => bearingToCompass(bearing.value));
+const altitudeDegrees = computed(() => toDegrees(props.sunPosition.altitude).toFixed(1));
+
+const isSunUp = computed(() => isSunAboveHorizon(props.sunPosition.altitude));
+
+const hasSunriseAndSunset = computed(() =>
+  isValidDate(props.sunTimes.sunrise) && isValidDate(props.sunTimes.sunset)
+);
+
+// Maximum altitude of the day, at solar noon
+const noonAltitude = computed(() => {
+  const { lat, lng } = props.coordinates;
+  return getSunPosition(props.sunTimes.solarNoon, lat, lng).altitude;
 });
 
-// Azimuth in degrees
-const azimuthDegrees = computed(() => {
-  const degrees = position.value.azimuth * (180 / Math.PI);
-  return ((degrees + 360) % 360).toFixed(1);
-});
+const isPolarDay = computed(() => !hasSunriseAndSunset.value && noonAltitude.value > 0);
 
-// Altitude in degrees
-const altitudeDegrees = computed(() => {
-  return (position.value.altitude * (180 / Math.PI)).toFixed(1);
-});
-
-// Sun times
-const sunTimes = computed(() => {
-  if (!props.coordinates.lat || !props.coordinates.lng) {
-    return { sunrise: null, sunset: null };
-  }
-  return getSunTimes(props.date, props.coordinates.lat, props.coordinates.lng);
-});
-
-// Daylight duration
 const daylightDuration = computed(() => {
-  if (!sunTimes.value.sunrise || !sunTimes.value.sunset) return null;
-  const diff = sunTimes.value.sunset - sunTimes.value.sunrise;
-  const hours = Math.floor(diff / 3600000);
-  const minutes = Math.floor((diff % 3600000) / 60000);
-  return `${hours}h ${minutes}m`;
+  if (!hasSunriseAndSunset.value) {
+    return isPolarDay.value ? '24h (midnight sun)' : '0h (polar night)';
+  }
+  const totalMinutes = Math.round((props.sunTimes.sunset - props.sunTimes.sunrise) / 60000);
+  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
 });
 
-// Shadow length with custom height
-const shadowLength = computed(() => {
-  const baseLength = calculateShadowLength(position.value.altitude);
-  return baseLength * props.shadowHeight;
+const sunrise = computed(() => formatZonedTime(props.sunTimes.sunrise, props.timeZone));
+const sunset = computed(() => formatZonedTime(props.sunTimes.sunset, props.timeZone));
+const solarNoon = computed(() => formatZonedTime(props.sunTimes.solarNoon, props.timeZone));
+
+const shadowLength = computed(() => calculateShadowLength(props.sunPosition.altitude, props.shadowHeight));
+
+const shadowLabel = computed(() => {
+  if (!(props.sunPosition.altitude > 0)) return '—';
+  const length = shadowLength.value;
+  return length > 1000 ? '> 1 km' : `${length.toFixed(1)} m`;
 });
 
-// Is sun up
-const isSunUp = computed(() => position.value.altitude > 0);
-
-// Compass direction
-const azimuthDirection = computed(() => {
-  const deg = parseFloat(azimuthDegrees.value);
-
-  if (deg >= 337.5 || deg < 22.5) return 'N';
-  if (deg >= 22.5 && deg < 67.5) return 'NE';
-  if (deg >= 67.5 && deg < 112.5) return 'E';
-  if (deg >= 112.5 && deg < 157.5) return 'SE';
-  if (deg >= 157.5 && deg < 202.5) return 'S';
-  if (deg >= 202.5 && deg < 247.5) return 'SW';
-  if (deg >= 247.5 && deg < 292.5) return 'W';
-  return 'NW';
-});
-
-// Solar production with custom system size
-const yearlyKwh = computed(() => {
-  if (!props.coordinates.lat || !props.coordinates.lng) return 0;
-  return calculateSolarProduction(props.coordinates.lat, props.coordinates.lng, props.solarSystemSize);
-});
-
-// Monthly breakdown estimate
+const yearlyKwh = computed(() =>
+  estimateAnnualSolarYield(props.coordinates.lat, props.coordinates.lng, props.solarSystemSize)
+);
 const monthlyKwh = computed(() => Math.round(yearlyKwh.value / 12));
 
-function calculateSolarProduction(lat, lng, systemSize) {
-  const baseProduction = 1500;
-  const latitudeFactor = Math.cos(Math.abs(lat) * Math.PI / 180);
+const coordinatesLabel = computed(() => formatCoordinates(props.coordinates.lat, props.coordinates.lng));
 
-  let regionalFactor = 1.0;
-
-  // Europe
-  if (lng >= -15 && lng <= 40 && lat >= 35 && lat <= 70) {
-    if (lat > 55) regionalFactor = 0.75;
-    else if (lat > 45) regionalFactor = 0.85;
-    else regionalFactor = 0.95;
-  }
-  // North America
-  else if (lng >= -130 && lng <= -60 && lat >= 25 && lat <= 60) {
-    if (lat > 45) regionalFactor = 0.8;
-    else if (lng < -100) regionalFactor = 1.1;
-    else regionalFactor = 0.9;
-  }
-  // Asia
-  else if (lng >= 60 && lng <= 150 && lat >= 10 && lat <= 60) {
-    if (lat > 40) regionalFactor = 0.75;
-    else regionalFactor = 0.95;
-  }
-  // Australia
-  else if (lng >= 110 && lng <= 180 && lat >= -50 && lat <= -10) {
-    regionalFactor = 1.1;
-  }
-  // Africa
-  else if (lng >= -20 && lng <= 50 && lat >= -35 && lat <= 35) {
-    regionalFactor = 1.15;
-  }
-  // South America
-  else if (lng >= -80 && lng <= -35 && lat >= -55 && lat <= 15) {
-    regionalFactor = 1.05;
-  }
-
-  return Math.round(baseProduction * systemSize * latitudeFactor * regionalFactor);
-}
-
-// Copy data to clipboard
 async function copyData() {
+  const { lat, lng } = props.coordinates;
   const data = `SolSet Sun Data
-Location: ${props.coordinates.lat.toFixed(6)}, ${props.coordinates.lng.toFixed(6)}
-Date: ${props.date.toLocaleDateString()}
-Time: ${props.time.toLocaleTimeString()}
+Location: ${props.locationName ? props.locationName + ' — ' : ''}${lat.toFixed(6)}, ${lng.toFixed(6)}
+Date: ${formatDisplayDate(props.localDate)}
+Time: ${formatMinutes(props.minutes)} (${props.timeZone})
 
-Sunrise: ${formatTime(sunTimes.value.sunrise, props.coordinates.lng)}
-Sunset: ${formatTime(sunTimes.value.sunset, props.coordinates.lng)}
-Daylight: ${daylightDuration.value || 'N/A'}
+Sunrise: ${sunrise.value}
+Solar noon: ${solarNoon.value} (max altitude ${toDegrees(noonAltitude.value).toFixed(1)}°)
+Sunset: ${sunset.value}
+Daylight: ${daylightDuration.value}
 
-Azimuth: ${azimuthDegrees.value}° (${azimuthDirection.value})
+Azimuth: ${azimuthLabel.value}° (${azimuthDirection.value})
 Altitude: ${altitudeDegrees.value}°
-Shadow Length: ${isSunUp.value ? shadowLength.value.toFixed(1) + 'm' : 'N/A'} (${props.shadowHeight}m object)
+Shadow length: ${shadowLabel.value} (${props.shadowHeight} m object)
 
-Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${props.solarSystemSize}kW system)`;
+Solar production estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${props.solarSystemSize} kW system)
+${window.location.href}`;
 
-  await copyToClipboard(data);
+  if (await copyToClipboard(data)) {
+    copied.value = true;
+    setTimeout(() => { copied.value = false; }, 2000);
+  } else {
+    showToast('Could not copy to clipboard');
+  }
 }
 </script>
 
 <template>
   <div class="solset-card sun-info-card">
     <div class="solset-card-header">
-      <h5><i class="bi bi-sun me-2"></i>Sun Data</h5>
+      <h2 class="card-title"><i class="bi bi-sun"></i>Sun Data</h2>
       <button
-        class="solset-btn solset-btn-ghost solset-btn-icon"
+        type="button"
+        class="solset-btn solset-btn-ghost btn-sm"
         @click="copyData"
-        title="Copy data to clipboard"
-        aria-label="Copy sun data"
+        :title="copied ? 'Copied!' : 'Copy sun data to clipboard'"
       >
-        <i class="bi bi-clipboard"></i>
+        <i :class="copied ? 'bi bi-check2' : 'bi bi-clipboard'"></i>
+        {{ copied ? 'Copied' : 'Copy' }}
       </button>
     </div>
 
     <div class="solset-card-body">
       <!-- Location -->
       <div class="section-title">Location</div>
-      <div class="data-row">
-        <span class="label">Coordinates</span>
-        <span class="value mono">{{ coordinates.lat.toFixed(4) }}°, {{ coordinates.lng.toFixed(4) }}°</span>
+      <div class="location-row">
+        <div class="location-text">
+          <span v-if="locationName" class="location-name" :title="locationName">{{ locationName }}</span>
+          <span class="mono location-coords">{{ coordinatesLabel }}</span>
+        </div>
+        <button
+          type="button"
+          class="solset-btn solset-btn-ghost solset-btn-icon"
+          :class="{ saved: isSaved }"
+          @click="emit('toggle-save')"
+          :aria-pressed="isSaved"
+          :aria-label="isSaved ? 'Remove from saved locations' : 'Save this location'"
+          :title="isSaved ? 'Remove from saved locations' : 'Save this location'"
+        >
+          <i :class="isSaved ? 'bi bi-bookmark-fill' : 'bi bi-bookmark'"></i>
+        </button>
       </div>
 
       <!-- Sun Times -->
-      <div class="section-title" style="margin-top: 16px;">Day Cycle</div>
+      <div class="section-title spaced">Day Cycle</div>
       <div class="sun-times-grid">
         <div class="sun-time sunrise">
           <i class="bi bi-sunrise"></i>
           <span class="time-label">Sunrise</span>
-          <span class="time-value">{{ formatTime(sunTimes.sunrise, coordinates.lng) }}</span>
+          <span class="time-value">{{ sunrise }}</span>
         </div>
         <div class="sun-time sunset">
           <i class="bi bi-sunset"></i>
           <span class="time-label">Sunset</span>
-          <span class="time-value">{{ formatTime(sunTimes.sunset, coordinates.lng) }}</span>
+          <span class="time-value">{{ sunset }}</span>
         </div>
       </div>
 
       <div class="data-row">
-        <span class="label">Daylight Duration</span>
-        <span class="value">{{ daylightDuration || 'N/A' }}</span>
+        <span class="label">Daylight</span>
+        <span class="value">{{ daylightDuration }}</span>
       </div>
-
-      <div class="timezone-note">
-        <i class="bi bi-info-circle"></i>
-        Times in location's approximate timezone
+      <div class="data-row">
+        <span class="label">Solar noon</span>
+        <span class="value">{{ solarNoon }} · {{ toDegrees(noonAltitude).toFixed(1) }}° high</span>
       </div>
 
       <!-- Current Position -->
-      <div class="section-title" style="margin-top: 16px;">Current Position</div>
+      <div class="section-title spaced">At {{ formatMinutes(minutes) }}</div>
       <div class="data-row">
         <span class="label">Azimuth</span>
         <span class="value">
-          <span class="mono">{{ azimuthDegrees }}°</span>
+          <span class="mono">{{ azimuthLabel }}°</span>
           <span class="solset-badge">{{ azimuthDirection }}</span>
         </span>
       </div>
@@ -223,13 +204,10 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
         <span class="value mono">{{ altitudeDegrees }}°</span>
       </div>
       <div class="data-row">
-        <span class="label">Shadow ({{ shadowHeight }}m object)</span>
-        <span class="value mono">
-          {{ isSunUp ? shadowLength.toFixed(1) + 'm' : '—' }}
-        </span>
+        <span class="label">Shadow of a {{ shadowHeight }} m object</span>
+        <span class="value mono">{{ shadowLabel }}</span>
       </div>
 
-      <!-- Sun Status -->
       <div :class="['sun-status', isSunUp ? 'up' : 'down']">
         <span class="icon">
           <i :class="isSunUp ? 'bi bi-brightness-high-fill' : 'bi bi-moon-stars-fill'"></i>
@@ -238,7 +216,7 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
       </div>
 
       <!-- Solar Production -->
-      <div class="section-title" style="margin-top: 16px;">Solar Production Estimate</div>
+      <div class="section-title spaced">Solar Production Estimate</div>
       <div class="solar-estimate">
         <div class="solar-main">
           <i class="bi bi-lightning-charge-fill"></i>
@@ -247,19 +225,20 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
             <span class="solar-monthly">~{{ monthlyKwh.toLocaleString() }} kWh/month avg</span>
           </div>
         </div>
-        <span class="solar-system-size">{{ solarSystemSize }}kW system</span>
+        <span class="solar-system-size">{{ solarSystemSize }} kW</span>
       </div>
-      <div class="timezone-note">
+      <div class="note">
         <i class="bi bi-info-circle"></i>
-        Rough estimate based on location only
+        Rough estimate from latitude and region only. Ignores roof tilt, orientation, shading and weather.
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.sun-info-card {
-  flex-shrink: 0;
+.btn-sm {
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .data-row .value {
@@ -268,11 +247,47 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
   gap: 8px;
 }
 
+.section-title.spaced {
+  margin-top: 20px;
+}
+
+.location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.location-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.location-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.location-coords {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.saved {
+  color: var(--sun-orange);
+}
+
 .sun-times-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .sun-time {
@@ -316,13 +331,18 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
   color: var(--text-primary);
 }
 
-.timezone-note {
+.note {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  padding: 8px 0;
+  padding: 8px 0 0;
   font-size: 11px;
+  line-height: 1.4;
   color: var(--text-tertiary);
+}
+
+.note i {
+  margin-top: 1px;
 }
 
 .sun-status {
@@ -336,7 +356,6 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
   padding: 12px;
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.1) 100%);
   border-radius: var(--radius-md);
-  margin-bottom: 8px;
 }
 
 .solar-main {
@@ -371,7 +390,7 @@ Solar Production Estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${prop
 .solar-system-size {
   font-size: 12px;
   font-weight: 500;
-  color: var(--success);
+  color: var(--success-text);
   background: rgba(16, 185, 129, 0.15);
   padding: 4px 8px;
   border-radius: var(--radius-full);
