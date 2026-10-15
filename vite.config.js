@@ -12,10 +12,14 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          'leaflet': ['leaflet'],
-          'd3': ['d3'],
-          'suncalc': ['suncalc']
+        manualChunks(id) {
+          if (id.includes('node_modules/leaflet')) return 'leaflet'
+          if (
+            id.includes('node_modules/suncalc') ||
+            id.includes('node_modules/@photostructure/tz-lookup')
+          ) {
+            return 'suncalc'
+          }
         }
       }
     }
