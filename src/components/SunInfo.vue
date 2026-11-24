@@ -1,11 +1,14 @@
 <script setup>
 import { ref, computed } from 'vue';
 import {
-  getSunPosition, isSunAboveHorizon, calculateShadowLength, azimuthToBearing, bearingToCompass, estimateAnnualSolarYield
+  getSunPosition, isSunAboveHorizon, calculateShadowLength, azimuthToBearing, toBearingPosition
 } from '../lib/sunCalc';
-import { formatZonedTime, formatMinutes, formatDisplayDate, isValidDate } from '../lib/time';
-import { copyToClipboard, formatCoordinates } from '../lib/utils';
+import { formatZonedTime, formatMinutes, formatDisplayDate, isValidDate, toZonedMinutes } from '../lib/time';
+import { copyToClipboard, formatCoordinates, formatBearing } from '../lib/utils';
+import { compassPoint, shadowLengthFactor } from '../lib/solar';
+import { formatLength } from '../lib/units';
 import { showToast } from '../lib/toast';
+import NumberField from './NumberField.vue';
 
 const props = defineProps({
   coordinates: {
@@ -44,21 +47,27 @@ const props = defineProps({
     type: Number,
     default: 1
   },
-  solarSystemSize: {
+  units: {
+    type: String,
+    default: 'metric'
+  },
+  // Magnetic declination in degrees (east positive), or null if unknown
+  declination: {
     type: Number,
-    default: 6.7
+    default: null
   }
 });
 
-const emit = defineEmits(['toggle-save']);
+const emit = defineEmits(['toggle-save', 'update:shadowHeight']);
 
 const copied = ref(false);
 
 const toDegrees = (radians) => radians * (180 / Math.PI);
 
+const sun = computed(() => toBearingPosition(props.sunPosition));
 const bearing = computed(() => azimuthToBearing(props.sunPosition.azimuth));
 const azimuthLabel = computed(() => bearing.value.toFixed(1));
-const azimuthDirection = computed(() => bearingToCompass(bearing.value));
+const azimuthDirection = computed(() => compassPoint(bearing.value));
 const altitudeDegrees = computed(() => toDegrees(props.sunPosition.altitude).toFixed(1));
 
 const isSunUp = computed(() => isSunAboveHorizon(props.sunPosition.altitude));
@@ -87,18 +96,61 @@ const sunrise = computed(() => formatZonedTime(props.sunTimes.sunrise, props.tim
 const sunset = computed(() => formatZonedTime(props.sunTimes.sunset, props.timeZone));
 const solarNoon = computed(() => formatZonedTime(props.sunTimes.solarNoon, props.timeZone));
 
+// Where on the horizon the sun comes up and goes down
+const bearingAt = (date) => {
+  if (!isValidDate(date)) return null;
+  const { lat, lng } = props.coordinates;
+  return formatBearing(azimuthToBearing(getSunPosition(date, lat, lng).azimuth));
+};
+const sunriseBearing = computed(() => bearingAt(props.sunTimes.sunrise));
+const sunsetBearing = computed(() => bearingAt(props.sunTimes.sunset));
+
+const twilight = computed(() => {
+  const { dawn, dusk } = props.sunTimes;
+  if (!isValidDate(dawn) || !isValidDate(dusk)) return null;
+  return `${formatZonedTime(dawn, props.timeZone)} – ${formatZonedTime(dusk, props.timeZone)}`;
+});
+
+// The sun is due south/north at solar noon, which is rarely 12:00 on the clock
+const noonOffset = computed(() => {
+  if (!isValidDate(props.sunTimes.solarNoon)) return null;
+  const offset = toZonedMinutes(props.sunTimes.solarNoon, props.timeZone) - 720;
+  if (Math.abs(offset) < 2) return 'at 12:00';
+  return `${Math.abs(offset)} min ${offset > 0 ? 'after' : 'before'} 12:00`;
+});
+
 const shadowLength = computed(() => calculateShadowLength(props.sunPosition.altitude, props.shadowHeight));
 
 const shadowLabel = computed(() => {
   if (!(props.sunPosition.altitude > 0)) return '—';
   const length = shadowLength.value;
-  return length > 1000 ? '> 1 km' : `${length.toFixed(1)} m`;
+  return length > 1000 ? (props.units === 'imperial' ? '> 3,000 ft' : '> 1 km') : formatLength(length, props.units);
 });
 
-const yearlyKwh = computed(() =>
-  estimateAnnualSolarYield(props.coordinates.lat, props.coordinates.lng, props.solarSystemSize)
+const shadowDirection = computed(() =>
+  props.sunPosition.altitude > 0 ? compassPoint(bearing.value + 180) : null
 );
-const monthlyKwh = computed(() => Math.round(yearlyKwh.value / 12));
+
+const shadowFactor = computed(() => {
+  const factor = shadowLengthFactor(sun.value.altitude);
+  return Number.isFinite(factor) && factor < 1000 ? `×${factor.toFixed(factor >= 10 ? 0 : 1)}` : null;
+});
+
+const declinationLabel = computed(() => {
+  if (props.declination === null) return null;
+  const rounded = Math.abs(props.declination).toFixed(1);
+  if (Math.abs(props.declination) < 0.05) return '0°';
+  return `${rounded}° ${props.declination > 0 ? 'E' : 'W'}`;
+});
+
+const declinationHint = computed(() => {
+  if (props.declination === null) return '';
+  const amount = Math.abs(props.declination);
+  if (amount < 0.5) return 'A compass points to true north here, near enough.';
+  const degrees = `${amount.toFixed(0)}°`;
+  const correction = props.declination > 0 ? `add ${degrees} to` : `subtract ${degrees} from`;
+  return `A compass needle points ${degrees} ${props.declination > 0 ? 'east' : 'west'} of true north here: ${correction} a compass reading to get the true bearing.`;
+});
 
 const coordinatesLabel = computed(() => formatCoordinates(props.coordinates.lat, props.coordinates.lng));
 
@@ -109,16 +161,15 @@ Location: ${props.locationName ? props.locationName + ' — ' : ''}${lat.toFixed
 Date: ${formatDisplayDate(props.localDate)}
 Time: ${formatMinutes(props.minutes)} (${props.timeZone})
 
-Sunrise: ${sunrise.value}
+Sunrise: ${sunrise.value}${sunriseBearing.value ? ` at ${sunriseBearing.value}` : ''}
 Solar noon: ${solarNoon.value} (max altitude ${toDegrees(noonAltitude.value).toFixed(1)}°)
-Sunset: ${sunset.value}
+Sunset: ${sunset.value}${sunsetBearing.value ? ` at ${sunsetBearing.value}` : ''}
 Daylight: ${daylightDuration.value}
 
-Azimuth: ${azimuthLabel.value}° (${azimuthDirection.value})
+Azimuth: ${azimuthLabel.value}° (${azimuthDirection.value}), from true north
 Altitude: ${altitudeDegrees.value}°
-Shadow length: ${shadowLabel.value} (${props.shadowHeight} m object)
-
-Solar production estimate: ~${yearlyKwh.value.toLocaleString()} kWh/year (${props.solarSystemSize} kW system)
+Shadow length: ${shadowLabel.value} (${formatLength(props.shadowHeight, props.units)} object)${declinationLabel.value ? `
+Magnetic declination: ${declinationLabel.value}` : ''}
 ${window.location.href}`;
 
   if (await copyToClipboard(data)) {
@@ -173,11 +224,13 @@ ${window.location.href}`;
           <i class="bi bi-sunrise"></i>
           <span class="time-label">Sunrise</span>
           <span class="time-value">{{ sunrise }}</span>
+          <span v-if="sunriseBearing" class="time-bearing">{{ sunriseBearing }}</span>
         </div>
         <div class="sun-time sunset">
           <i class="bi bi-sunset"></i>
           <span class="time-label">Sunset</span>
           <span class="time-value">{{ sunset }}</span>
+          <span v-if="sunsetBearing" class="time-bearing">{{ sunsetBearing }}</span>
         </div>
       </div>
 
@@ -186,14 +239,18 @@ ${window.location.href}`;
         <span class="value">{{ daylightDuration }}</span>
       </div>
       <div class="data-row">
-        <span class="label">Solar noon</span>
+        <span class="label">Solar noon <small v-if="noonOffset">{{ noonOffset }}</small></span>
         <span class="value">{{ solarNoon }} · {{ toDegrees(noonAltitude).toFixed(1) }}° high</span>
+      </div>
+      <div v-if="twilight" class="data-row">
+        <span class="label">First to last light <small>civil twilight</small></span>
+        <span class="value">{{ twilight }}</span>
       </div>
 
       <!-- Current Position -->
       <div class="section-title spaced">At {{ formatMinutes(minutes) }}</div>
       <div class="data-row">
-        <span class="label">Azimuth</span>
+        <span class="label">Azimuth <small>from true north</small></span>
         <span class="value">
           <span class="mono">{{ azimuthLabel }}°</span>
           <span class="solset-badge">{{ azimuthDirection }}</span>
@@ -204,8 +261,21 @@ ${window.location.href}`;
         <span class="value mono">{{ altitudeDegrees }}°</span>
       </div>
       <div class="data-row">
-        <span class="label">Shadow of a {{ shadowHeight }} m object</span>
-        <span class="value mono">{{ shadowLabel }}</span>
+        <div class="label">
+          Shadow length
+          <label class="shadow-label" for="shadow-object">
+            of an object
+            <NumberField
+              id="shadow-object" length :units="units" :min="0.1" :max="1000" :step="0.1"
+              :model-value="shadowHeight" @update:model-value="emit('update:shadowHeight', $event)"
+            />
+            tall
+          </label>
+        </div>
+        <span class="value mono nowrap">
+          {{ shadowLabel }}
+          <span v-if="shadowDirection" class="solset-badge" :title="`The shadow points ${shadowDirection}; it is ${shadowFactor || 'many times'} the object's height`">→ {{ shadowDirection }}</span>
+        </span>
       </div>
 
       <div :class="['sun-status', isSunUp ? 'up' : 'down']">
@@ -215,22 +285,21 @@ ${window.location.href}`;
         <span>Sun is {{ isSunUp ? 'above' : 'below' }} the horizon</span>
       </div>
 
-      <!-- Solar Production -->
-      <div class="section-title spaced">Solar Production Estimate</div>
-      <div class="solar-estimate">
-        <div class="solar-main">
-          <i class="bi bi-lightning-charge-fill"></i>
-          <div class="solar-values">
-            <span class="solar-yearly">~{{ yearlyKwh.toLocaleString() }} kWh/year</span>
-            <span class="solar-monthly">~{{ monthlyKwh.toLocaleString() }} kWh/month avg</span>
-          </div>
+      <!-- North -->
+      <template v-if="declinationLabel">
+        <div class="section-title spaced">Finding true north</div>
+        <div class="data-row">
+          <span class="label">Magnetic declination</span>
+          <span class="value mono">{{ declinationLabel }}</span>
         </div>
-        <span class="solar-system-size">{{ solarSystemSize }} kW</span>
-      </div>
-      <div class="note">
-        <i class="bi bi-info-circle"></i>
-        Rough estimate from latitude and region only. Ignores roof tilt, orientation, shading and weather.
-      </div>
+        <div class="note">
+          <i class="bi bi-compass"></i>
+          <span>
+            {{ declinationHint }}
+            Or use the sun: at solar noon ({{ solarNoon }}) the shadow of a plumb line runs exactly north–south.
+          </span>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -349,50 +418,32 @@ ${window.location.href}`;
   margin-top: 12px;
 }
 
-.solar-estimate {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px;
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.1) 100%);
-  border-radius: var(--radius-md);
-}
-
-.solar-main {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.solar-main i {
-  font-size: 24px;
-  color: var(--success);
-}
-
-.solar-values {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.solar-yearly {
+.time-bearing {
   font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
-.solar-monthly {
+.data-row .label small {
+  display: block;
   font-size: 11px;
   color: var(--text-tertiary);
 }
 
-.solar-system-size {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--success-text);
-  background: rgba(16, 185, 129, 0.15);
-  padding: 4px 8px;
-  border-radius: var(--radius-full);
+.shadow-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.shadow-label .number-field {
+  width: 74px;
+}
+
+.nowrap {
+  white-space: nowrap;
 }
 </style>

@@ -2,6 +2,9 @@ import L from 'leaflet';
 
 const BASE_LAYER_KEY = 'solset_base_layer';
 
+// Tiles stop at zoom 19; beyond that they are stretched so a single plot can fill the screen
+export const MAX_ZOOM = 21;
+
 /**
  * Initialize a Leaflet map with the available base layers
  * @param {HTMLElement} element - The DOM element to attach the map to
@@ -15,26 +18,34 @@ export function initMap(element, coords, zoom = 13) {
     zoom: zoom,
     zoomControl: true,
     attributionControl: true,
+    maxZoom: MAX_ZOOM,
     // Arrow keys are reserved for the app's time shortcuts
     keyboard: false
   });
 
+  // Place labels sit above the imagery but below the house and shadow drawings
+  map.createPane('labelsPane').style.zIndex = 350;
+  map.getPane('labelsPane').style.pointerEvents = 'none';
+
   // Standard OpenStreetMap
   const openStreetMap = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    maxZoom: 19
+    maxNativeZoom: 19,
+    maxZoom: MAX_ZOOM
   });
 
   // ESRI World Street Map
   const esriWorldStreet = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri',
-    maxZoom: 19
+    maxNativeZoom: 19,
+    maxZoom: MAX_ZOOM
   });
 
   // ESRI World Imagery (satellite)
   const esriWorldImagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri &mdash; Maxar, GeoEye, Earthstar',
-    maxZoom: 19
+    maxNativeZoom: 19,
+    maxZoom: MAX_ZOOM
   });
 
   // ESRI World Imagery with labels
@@ -42,8 +53,9 @@ export function initMap(element, coords, zoom = 13) {
     esriWorldImagery,
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
       attribution: 'Labels &copy; Esri',
-      maxZoom: 19,
-      pane: 'overlayPane'
+      maxNativeZoom: 19,
+      maxZoom: MAX_ZOOM,
+      pane: 'labelsPane'
     })
   ]);
 

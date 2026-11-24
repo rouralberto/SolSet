@@ -1,7 +1,6 @@
 <script setup>
-import { ref, onMounted, nextTick } from 'vue';
-import { getRecentLocations, clearRecentLocations, downloadFile, formatCoordinates } from '../lib/utils';
-import ToggleSwitch from './ToggleSwitch.vue';
+import { ref, onMounted } from 'vue';
+import { getRecentLocations, clearRecentLocations, downloadFile, formatCoordinates, getObstacles } from '../lib/utils';
 
 const props = defineProps({
   settings: {
@@ -26,6 +25,11 @@ const tabs = [
   { id: 'export', label: 'Share & Export', icon: 'bi-box-arrow-up' }
 ];
 
+const unitOptions = [
+  { id: 'metric', label: 'Metric', detail: 'metres' },
+  { id: 'imperial', label: 'Imperial', detail: 'feet' }
+];
+
 const themes = [
   { id: 'light', label: 'Light', icon: 'bi-sun' },
   { id: 'dark', label: 'Dark', icon: 'bi-moon' },
@@ -36,15 +40,6 @@ onMounted(() => panel.value?.focus());
 
 function update(patch) {
   emit('update-settings', patch);
-}
-
-// Number inputs commit on change (blur/enter) so values aren't clamped mid-typing
-async function updateNumber(key, event) {
-  const input = event.target;
-  update({ [key]: input.value === '' ? null : Number(input.value) });
-  // Reflect the sanitised value back if the input was invalid or out of range
-  await nextTick();
-  input.value = props.settings[key];
 }
 
 function goTo(location) {
@@ -60,6 +55,7 @@ function exportData() {
   const data = {
     settings: props.settings,
     savedLocations: props.savedLocations,
+    obstacles: getObstacles(),
     exportedAt: new Date().toISOString()
   };
   downloadFile(JSON.stringify(data, null, 2), 'solset-export.json');
@@ -120,65 +116,28 @@ function exportData() {
             </div>
 
             <div class="setting-group">
-              <h3>Shadow Calculation</h3>
-              <div class="setting-row">
-                <label class="setting-label" for="shadow-height">
-                  Object height (m)
-                  <span class="setting-hint">Height of a wall, tree or fence to calculate its shadow length</span>
-                </label>
-                <input
-                  id="shadow-height"
-                  type="number"
-                  :value="settings.shadowHeight"
-                  @change="updateNumber('shadowHeight', $event)"
-                  min="0.1"
-                  max="1000"
-                  step="0.1"
-                  inputmode="decimal"
-                  class="solset-input setting-input-small"
-                />
+              <h3>Units</h3>
+              <div class="theme-selector">
+                <button
+                  v-for="option in unitOptions"
+                  :key="option.id"
+                  type="button"
+                  :class="['theme-btn', 'compact', { active: settings.units === option.id }]"
+                  :aria-pressed="settings.units === option.id"
+                  @click="update({ units: option.id })"
+                >
+                  <strong>{{ option.label }}</strong>
+                  {{ option.detail }}
+                </button>
               </div>
             </div>
 
             <div class="setting-group">
-              <h3>Solar Production</h3>
-              <div class="setting-row">
-                <label class="setting-label" for="system-size">
-                  System size (kW)
-                  <span class="setting-hint">Peak power of the solar panel system for the production estimate</span>
-                </label>
-                <input
-                  id="system-size"
-                  type="number"
-                  :value="settings.solarSystemSize"
-                  @change="updateNumber('solarSystemSize', $event)"
-                  min="0.1"
-                  max="10000"
-                  step="0.1"
-                  inputmode="decimal"
-                  class="solset-input setting-input-small"
-                />
-              </div>
-            </div>
-
-            <div class="setting-group">
-              <h3>House Layout</h3>
-              <div class="setting-row">
-                <span class="setting-label">Show house layout on map</span>
-                <ToggleSwitch
-                  :model-value="settings.showHouse"
-                  @update:model-value="update({ showHouse: $event })"
-                  label="Show house layout on map"
-                />
-              </div>
-              <div class="setting-row">
-                <span class="setting-label">Auto-orient house to optimal position</span>
-                <ToggleSwitch
-                  :model-value="settings.autoOrientHouse"
-                  @update:model-value="update({ autoOrientHouse: $event })"
-                  label="Auto-orient house to optimal position"
-                />
-              </div>
+              <h3>Where things are</h3>
+              <p class="text-muted">
+                The house, its orientation and the window overhang are in the <strong>House</strong> tab,
+                trees, buildings and terrain in <strong>Shading</strong>, and the panels in <strong>Solar</strong>.
+              </p>
             </div>
           </div>
 
@@ -236,7 +195,7 @@ function exportData() {
           <div v-if="activeTab === 'export'" class="settings-section">
             <div class="setting-group">
               <h3>Share Current View</h3>
-              <p class="text-muted">Copy a link to this exact location, date and time.</p>
+              <p class="text-muted">Copy a link to this location, date and time, with the house as you set it up.</p>
               <button type="button" class="solset-btn solset-btn-secondary" @click="emit('share')">
                 <i class="bi bi-link-45deg"></i>
                 Copy Share Link
@@ -245,7 +204,7 @@ function exportData() {
 
             <div class="setting-group">
               <h3>Export Data</h3>
-              <p class="text-muted">Download your settings and saved locations as a JSON file.</p>
+              <p class="text-muted">Download your settings, saved locations and the trees and buildings you placed as a JSON file.</p>
               <button type="button" class="solset-btn solset-btn-secondary" @click="exportData">
                 <i class="bi bi-download"></i>
                 Export to JSON
@@ -380,38 +339,10 @@ function exportData() {
   font-size: 12px;
 }
 
-.setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-color);
-}
 
-.setting-row:last-child {
-  border-bottom: none;
-}
 
-.setting-label {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 14px;
-  color: var(--text-primary);
-}
 
-.setting-hint {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
 
-.setting-input-small {
-  width: 90px;
-  flex-shrink: 0;
-  text-align: right;
-  padding: 8px 12px;
-}
 
 .theme-selector {
   display: flex;
@@ -447,6 +378,16 @@ function exportData() {
 
 .theme-btn i {
   font-size: 24px;
+}
+
+.theme-btn.compact {
+  gap: 2px;
+  padding: 12px;
+}
+
+.theme-btn.compact strong {
+  font-size: 14px;
+  color: var(--text-primary);
 }
 
 .empty-state {

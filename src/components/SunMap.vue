@@ -1,9 +1,11 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
+import L from 'leaflet';
 import { initMap } from '../lib/mapUtils';
-import { getSunTrajectory, getSeasonalTrajectories, isSunAboveHorizon } from '../lib/sunCalc';
+import { getSunTrajectory, getSeasonalTrajectories, isSunAboveHorizon, toBearingPosition } from '../lib/sunCalc';
 import { zonedTimeToDate } from '../lib/time';
-import HouseLayout from './HouseLayout.vue';
+import { metersPerPixel, squareBounds } from '../lib/geo';
+import SiteScene from './SiteScene.vue';
 import 'leaflet/dist/leaflet.css';
 
 const props = defineProps({
@@ -43,20 +45,63 @@ const props = defineProps({
   houseOrientation: {
     type: Number,
     default: 0
+  },
+  // { width, depth, wallHeight, roofPitch }
+  house: {
+    type: Object,
+    required: true
+  },
+  // Obstacles in metres relative to the map centre, from localObstacles()
+  obstacles: {
+    type: Array,
+    default: () => []
+  },
+  selectedObstacleId: {
+    type: String,
+    default: null
+  },
+  // 'tree' | 'building' while the next map click places an obstacle
+  placingKind: {
+    type: String,
+    default: null
+  },
+  units: {
+    type: String,
+    default: 'metric'
   }
 });
 
-const emit = defineEmits(['update:coordinates', 'update:zoom']);
+const emit = defineEmits([
+  'update:coordinates', 'update:zoom', 'place-obstacle', 'select-obstacle', 'move-obstacle'
+]);
 
 const mapContainer = ref(null);
+const sceneSvg = ref(null);
 let map = null;
+let sceneOverlay = null;
+let scaleControl = null;
 let resizeObserver = null;
 
-// Sky overlay geometry
+// Sky overlay geometry (fixed size on screen)
 const OVERLAY_SIZE = 300;
 const OVERLAY_RADIUS = 120;
-const HOUSE_SIZE = 150;
 const CENTER = OVERLAY_SIZE / 2;
+
+// The site scene is drawn in metres; this is half the side of its SVG viewBox.
+// Content further out still renders (overflow is visible).
+const SCENE_HALF = 60;
+// Below this size on screen the house is drawn larger than life so it stays readable
+const MIN_HOUSE_PIXELS = 44;
+
+const resolution = ref(metersPerPixel(props.coordinates.lat, props.zoom));
+
+const houseScale = computed(() => {
+  const pixels = Math.max(props.house.width, props.house.depth) / resolution.value;
+  return pixels >= MIN_HOUSE_PIXELS ? 1 : MIN_HOUSE_PIXELS / pixels;
+});
+
+const isToScale = computed(() => houseScale.value === 1);
+const sunBearing = computed(() => toBearingPosition(props.sunPosition));
 
 /**
  * Project a sun position onto the overlay (azimuthal projection, north up).
@@ -130,9 +175,25 @@ const compassLabels = [
   { label: 'W', x: CENTER - OVERLAY_RADIUS - 12, y: CENTER }
 ];
 
+// Tick marks every 15° around the horizon ring, longer every 45°
+const compassTicks = Array.from({ length: 24 }, (_, i) => {
+  const angle = (i * 15 * Math.PI) / 180;
+  const inner = OVERLAY_RADIUS - (i % 3 === 0 ? 7 : 4);
+  return {
+    x1: CENTER + Math.sin(angle) * inner,
+    y1: CENTER - Math.cos(angle) * inner,
+    x2: CENTER + Math.sin(angle) * OVERLAY_RADIUS,
+    y2: CENTER - Math.cos(angle) * OVERLAY_RADIUS
+  };
+});
+
 function isMapCenteredOn(coords) {
   const center = map.getCenter();
   return Math.abs(center.lat - coords.lat) < 1e-7 && Math.abs(center.lng - coords.lng) < 1e-7;
+}
+
+function updateResolution() {
+  resolution.value = metersPerPixel(map.getCenter().lat, map.getZoom());
 }
 
 function handleMapMove() {
@@ -141,11 +202,77 @@ function handleMapMove() {
 }
 
 function handleZoomEnd() {
+  updateResolution();
   emit('update:zoom', map.getZoom());
 }
 
 function handleMapClick(e) {
+  if (props.placingKind) {
+    emit('place-obstacle', { lat: e.latlng.lat, lng: e.latlng.lng });
+    return;
+  }
+  if (props.selectedObstacleId) {
+    emit('select-obstacle', null);
+    return;
+  }
   map.panTo(e.latlng);
+}
+
+function sceneBounds(coords) {
+  return L.latLngBounds(squareBounds(coords, SCENE_HALF));
+}
+
+function updateScaleControl() {
+  if (!map) return;
+  scaleControl?.remove();
+  scaleControl = L.control.scale({
+    position: 'bottomright',
+    metric: props.units !== 'imperial',
+    imperial: props.units === 'imperial',
+    maxWidth: 140
+  }).addTo(map);
+}
+
+// Dragging an obstacle moves it on the ground; the map itself stays put
+let drag = null;
+
+function handleObstaclePointerDown({ id, event }) {
+  emit('select-obstacle', id);
+  if (event.button > 0) return;
+
+  const item = props.obstacles.find(o => o.obstacle.id === id);
+  if (!item) return;
+  const pointer = map.mouseEventToLatLng(event);
+  drag = {
+    id,
+    pointerId: event.pointerId,
+    // Keep the grab point under the pointer
+    dLat: item.obstacle.lat - pointer.lat,
+    dLng: item.obstacle.lng - pointer.lng,
+    moved: false,
+    startX: event.clientX,
+    startY: event.clientY
+  };
+  map.dragging.disable();
+  window.addEventListener('pointermove', handleDragMove);
+  window.addEventListener('pointerup', handleDragEnd);
+  window.addEventListener('pointercancel', handleDragEnd);
+}
+
+function handleDragMove(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return;
+  drag.moved = true;
+  const pointer = map.mouseEventToLatLng(event);
+  emit('move-obstacle', { id: drag.id, lat: pointer.lat + drag.dLat, lng: pointer.lng + drag.dLng });
+}
+
+function handleDragEnd() {
+  drag = null;
+  map?.dragging.enable();
+  window.removeEventListener('pointermove', handleDragMove);
+  window.removeEventListener('pointerup', handleDragEnd);
+  window.removeEventListener('pointercancel', handleDragEnd);
 }
 
 onMounted(() => {
@@ -153,6 +280,11 @@ onMounted(() => {
   map.on('move', handleMapMove);
   map.on('zoomend', handleZoomEnd);
   map.on('click', handleMapClick);
+  updateResolution();
+  updateScaleControl();
+
+  // Leaflet takes over the scene's <svg>, keeping it glued to the ground through pans and zooms
+  sceneOverlay = L.svgOverlay(sceneSvg.value, sceneBounds(props.coordinates), { interactive: false }).addTo(map);
 
   // Keep Leaflet in sync when the layout changes size (e.g. responsive breakpoints)
   resizeObserver = new ResizeObserver(() => map.invalidateSize());
@@ -161,6 +293,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   resizeObserver?.disconnect();
+  handleDragEnd();
   if (map) {
     map.off();
     map.remove();
@@ -171,27 +304,56 @@ onUnmounted(() => {
 // Re-centre when coordinates change from outside the map (search, saved locations, ...).
 // Changes that originate from panning already match the map centre.
 watch(() => props.coordinates, (coords) => {
-  if (map && !isMapCenteredOn(coords)) {
+  if (!map) return;
+  if (!isMapCenteredOn(coords)) {
     map.setView([coords.lat, coords.lng], map.getZoom(), { animate: false });
+  }
+  sceneOverlay?.setBounds(sceneBounds(coords));
+  updateResolution();
+});
+
+watch(() => props.units, updateScaleControl);
+
+defineExpose({
+  /** Zoom in far enough to see the house at its real size */
+  zoomToHouse() {
+    if (map && map.getZoom() < 19) map.setZoom(19);
   }
 });
 </script>
 
 <template>
-  <div class="sun-map-container">
+  <div :class="['sun-map-container', { placing: !!placingKind }]">
     <div ref="mapContainer" class="map-container"></div>
 
-    <div v-if="showHouse" class="house-layout-overlay">
-      <HouseLayout
-        :sun-position="sunPosition"
-        :orientation="houseOrientation"
-        :size="HOUSE_SIZE"
-      />
+    <!-- Moved into the map by Leaflet (see onMounted) -->
+    <div class="scene-holder">
+      <svg
+        ref="sceneSvg"
+        class="site-scene-svg"
+        :viewBox="`${-SCENE_HALF} ${-SCENE_HALF} ${SCENE_HALF * 2} ${SCENE_HALF * 2}`"
+        role="img"
+        aria-label="House and surrounding objects with their shadows"
+      >
+        <SiteScene
+          :house="house"
+          :facing="houseOrientation"
+          :sun="isSunUp ? sunBearing : null"
+          :obstacles="obstacles"
+          :show-house="showHouse"
+          :house-scale="houseScale"
+          :selected-id="selectedObstacleId"
+          :units="units"
+          interactive
+          @obstacle-pointerdown="handleObstaclePointerDown"
+        />
+      </svg>
     </div>
 
     <div class="sun-overlay-container" aria-hidden="true">
       <svg class="sun-overlay-svg" :viewBox="`0 0 ${OVERLAY_SIZE} ${OVERLAY_SIZE}`">
         <circle :cx="CENTER" :cy="CENTER" :r="OVERLAY_RADIUS" class="horizon-ring" />
+        <line v-for="(t, i) in compassTicks" :key="i" :x1="t.x1" :y1="t.y1" :x2="t.x2" :y2="t.y2" class="compass-tick" />
         <text
           v-for="c in compassLabels"
           :key="c.label"
@@ -225,6 +387,11 @@ watch(() => props.coordinates, (coords) => {
 
     <div class="map-crosshair" aria-hidden="true"></div>
 
+    <div v-if="placingKind" class="placing-hint" role="status">
+      <i class="bi bi-cursor"></i>
+      Click the map where the {{ placingKind }} stands
+    </div>
+
     <div class="map-legend">
       <div class="legend-row"><span class="legend-line today"></span>Sun path (selected day)</div>
       <div class="legend-row"><span class="legend-dot sunrise"></span>Sunrise<span class="legend-dot sunset"></span>Sunset</div>
@@ -233,6 +400,10 @@ watch(() => props.coordinates, (coords) => {
           <span class="legend-line dashed" :style="{ borderColor: path.color }"></span>{{ path.label }}
         </div>
       </template>
+      <div v-if="showHouse" class="legend-row scale-note">
+        <template v-if="isToScale"><i class="bi bi-rulers"></i>House and shadows to scale</template>
+        <template v-else><i class="bi bi-zoom-in"></i>House enlarged: zoom in for true scale</template>
+      </div>
     </div>
   </div>
 </template>
@@ -254,7 +425,6 @@ watch(() => props.coordinates, (coords) => {
 }
 
 .sun-overlay-container,
-.house-layout-overlay,
 .map-crosshair {
   position: absolute;
   top: 50%;
@@ -277,10 +447,37 @@ watch(() => props.coordinates, (coords) => {
   overflow: visible;
 }
 
-.house-layout-overlay {
-  width: 150px;
-  height: 150px;
-  z-index: 10;
+.scene-holder {
+  display: none;
+}
+
+:deep(.site-scene-svg) {
+  overflow: visible;
+}
+
+.placing :deep(.leaflet-container),
+.placing :deep(.leaflet-interactive) {
+  cursor: crosshair;
+}
+
+.placing-hint {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #0f172a;
+  background: var(--sun-gold);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .map-crosshair {
@@ -314,6 +511,11 @@ watch(() => props.coordinates, (coords) => {
   stroke: rgba(15, 23, 42, 0.25);
   stroke-width: 1.5;
   stroke-dasharray: 2 4;
+}
+
+.compass-tick {
+  stroke: rgba(15, 23, 42, 0.35);
+  stroke-width: 1;
 }
 
 .compass-label {
@@ -411,6 +613,13 @@ watch(() => props.coordinates, (coords) => {
 
 .legend-dot.sunrise { background: var(--sun-orange); }
 .legend-dot.sunset { background: var(--sky-blue); margin-left: 8px; }
+
+.scale-note {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(226, 232, 240, 0.2);
+  color: #cbd5e1;
+}
 
 :deep(.leaflet-container) {
   background-color: var(--bg-tertiary);

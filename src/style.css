@@ -36,6 +36,15 @@
   --error: #ef4444;
   --info: #3b82f6;
 
+  /* Chart series (validated for colour-vision deficiency; keep this order) */
+  --series-winter: #2a78d6;
+  --series-summer: #eb6834;
+  --series-equinox: #1baf7a;
+  --series-selected: #eda100;
+  --chart-grid: #e2e8f0;
+  --chart-axis: #cbd5e1;
+  --chart-bar: #2a78d6;
+
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
@@ -77,6 +86,14 @@
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
   --shadow-glow: 0 0 30px rgba(245, 158, 11, 0.2);
+
+  --series-winter: #3987e5;
+  --series-summer: #d95926;
+  --series-equinox: #199e70;
+  --series-selected: #c98500;
+  --chart-grid: #334155;
+  --chart-axis: #475569;
+  --chart-bar: #3987e5;
 
   --success-text: #34d399;
   --status-night: #c4b5fd;
@@ -672,5 +689,27 @@ h1, h2, h3, h4, h5, h6 {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Printing: only the site report goes on paper */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  html, body {
+    height: auto;
+    background: #ffffff;
+  }
+
+  body:has(.report-overlay) #app,
+  body:has(.report-overlay) .solset-toast {
+    display: none !important;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }

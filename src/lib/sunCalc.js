@@ -4,8 +4,9 @@ import { isValidDate } from './time';
 const HOUR_MS = 3600000;
 const DEG_TO_RAD = Math.PI / 180;
 
-// Sunrise/sunset are defined with the sun's upper limb on the horizon, including refraction
-const SUNRISE_ALTITUDE = -0.833 * DEG_TO_RAD;
+// Sunrise/sunset are defined with the sun's upper limb on the horizon. SunCalc reports the
+// apparent (refraction-corrected) altitude of the sun's centre, which is about -0.35° then.
+const SUNRISE_ALTITUDE = -0.35 * DEG_TO_RAD;
 
 /** SunCalc v2 returns degrees, north-based azimuth; the app uses radians from south. */
 function adaptPosition({ azimuth, altitude }) {
@@ -60,20 +61,21 @@ export function getSunPosition(dateTime, lat, lng) {
 }
 
 /**
+ * Sun position as a compass bearing and altitude in degrees (the convention of lib/solar.js)
+ * @param {{azimuth: number, altitude: number}} position - From getSunPosition
+ * @returns {{azimuth: number, altitude: number}}
+ */
+export function toBearingPosition(position) {
+  return { azimuth: azimuthToBearing(position.azimuth), altitude: position.altitude / DEG_TO_RAD };
+}
+
+/**
  * Convert a SunCalc azimuth to a compass bearing
  * @param {number} azimuth - Radians from south, positive towards west
  * @returns {number} Degrees clockwise from north (0-360)
  */
 export function azimuthToBearing(azimuth) {
   return ((azimuth * 180 / Math.PI + 180) % 360 + 360) % 360;
-}
-
-/**
- * Compass label for a bearing, e.g. 170 -> "S"
- */
-export function bearingToCompass(bearing) {
-  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-  return directions[Math.round((((bearing % 360) + 360) % 360) / 45) % 8];
 }
 
 /**
@@ -138,64 +140,6 @@ export function calculateShadowLength(altitude, height = 1) {
 }
 
 /**
- * Calculate optimal house orientation for a given location: the direction the
- * "day" side should face. Uses an irradiance-weighted circular mean of the sun's
- * bearing across the year, favouring winter sun, nudged slightly towards morning sun.
- * @param {number} lat - Latitude
- * @param {number} lng - Longitude
- * @returns {number} Optimal orientation in degrees (clockwise from north)
- */
-export function calculateOptimalHouseOrientation(lat, lng) {
-  lat = Number(lat);
-  lng = Number(lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return 0;
-
-  const isNorthernHemisphere = lat >= 0;
-  const baseOrientation = isNorthernHemisphere ? 180 : 0;
-  const year = 2025; // Sun geometry is effectively identical year to year
-  const samplesPerDay = 24;
-
-  let x = 0;
-  let y = 0;
-  let totalWeight = 0;
-
-  for (let month = 0; month < 12; month++) {
-    // Approximate local solar noon on the 15th of each month
-    const reference = new Date(Date.UTC(year, month, 15, 12) - (lng / 15) * HOUR_MS);
-    const window = getDaylightWindow(reference, lat, lng);
-    if (!window) continue;
-
-    // Favour winter sun (passive heating) over summer sun (overheating)
-    const isNorthernSummer = month >= 4 && month <= 8;
-    const seasonWeight = isNorthernHemisphere === isNorthernSummer ? 0.7 : 1.3;
-
-    for (let i = 0; i <= samplesPerDay; i++) {
-      const time = new Date(window.start + (window.end - window.start) * i / samplesPerDay);
-      const position = sunPositionAt(time, lat, lng);
-      if (position.altitude <= 0) continue;
-
-      const weight = seasonWeight * Math.sin(position.altitude);
-      const bearing = (azimuthToBearing(position.azimuth) * Math.PI) / 180;
-      x += weight * Math.sin(bearing);
-      y += weight * Math.cos(bearing);
-      totalWeight += weight;
-    }
-  }
-
-  // Circular mean; fall back to facing the equator if the sun is evenly spread
-  const magnitude = Math.hypot(x, y);
-  let optimalOrientation = totalWeight > 0 && magnitude / totalWeight > 0.05
-    ? (Math.atan2(x, y) * 180) / Math.PI
-    : baseOrientation;
-
-  // Slight adjustment towards morning (east) sun
-  const morningAdjustment = 15 - (Math.abs(lat) / 90) * 10;
-  optimalOrientation += isNorthernHemisphere ? -morningAdjustment : morningAdjustment;
-
-  return ((optimalOrientation % 360) + 360) % 360;
-}
-
-/**
  * Solstices and equinoxes for a year, labelled for the location's hemisphere
  * (June is summer in the north but winter in the south).
  * @param {number} year - Year
@@ -209,11 +153,12 @@ export function getKeyDates(year, lat) {
   const march = `${year}-03-20`;
   const september = `${year}-09-22`;
 
+  // Colours are a validated colour-blind-safe set shared with the sun-path chart
   return [
-    { key: 'summer', dateString: north ? june : december, label: 'Summer Solstice', shortLabel: 'Summer', color: '#ef4444', icon: 'bi-brightness-high' },
-    { key: 'winter', dateString: north ? december : june, label: 'Winter Solstice', shortLabel: 'Winter', color: '#3b82f6', icon: 'bi-snow' },
-    { key: 'spring', dateString: north ? march : september, label: 'Spring Equinox', shortLabel: 'Spring', color: '#22c55e', icon: 'bi-flower1' },
-    { key: 'fall', dateString: north ? september : march, label: 'Fall Equinox', shortLabel: 'Fall', color: '#f97316', icon: 'bi-tree' }
+    { key: 'summer', dateString: north ? june : december, label: 'Summer Solstice', shortLabel: 'Summer', color: '#eb6834', icon: 'bi-brightness-high' },
+    { key: 'winter', dateString: north ? december : june, label: 'Winter Solstice', shortLabel: 'Winter', color: '#2a78d6', icon: 'bi-snow' },
+    { key: 'spring', dateString: north ? march : september, label: 'Spring Equinox', shortLabel: 'Spring', color: '#1baf7a', icon: 'bi-flower1' },
+    { key: 'fall', dateString: north ? september : march, label: 'Fall Equinox', shortLabel: 'Fall', color: '#e87ba4', icon: 'bi-tree' }
   ];
 }
 
@@ -235,52 +180,4 @@ export function getSeasonalTrajectories(lat, lng, year, noonForDate, steps = 48)
     ...keyDate,
     points: getSunTrajectory(noonForDate(keyDate.dateString), lat, lng, steps)
   }));
-}
-
-/**
- * Very rough annual PV yield estimate based on location only
- * @param {number} lat - Latitude
- * @param {number} lng - Longitude
- * @param {number} systemSize - System size in kW
- * @returns {number} kWh per year
- */
-export function estimateAnnualSolarYield(lat, lng, systemSize) {
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !(systemSize > 0)) return 0;
-
-  const baseProduction = 1500;
-  const latitudeFactor = Math.cos(Math.abs(lat) * Math.PI / 180);
-
-  let regionalFactor = 1.0;
-
-  // Europe
-  if (lng >= -15 && lng <= 40 && lat >= 35 && lat <= 70) {
-    if (lat > 55) regionalFactor = 0.75;
-    else if (lat > 45) regionalFactor = 0.85;
-    else regionalFactor = 0.95;
-  }
-  // North America
-  else if (lng >= -130 && lng <= -60 && lat >= 25 && lat <= 60) {
-    if (lat > 45) regionalFactor = 0.8;
-    else if (lng < -100) regionalFactor = 1.1;
-    else regionalFactor = 0.9;
-  }
-  // Asia
-  else if (lng >= 60 && lng <= 150 && lat >= 10 && lat <= 60) {
-    if (lat > 40) regionalFactor = 0.75;
-    else regionalFactor = 0.95;
-  }
-  // Australia
-  else if (lng >= 110 && lng <= 180 && lat >= -50 && lat <= -10) {
-    regionalFactor = 1.1;
-  }
-  // Africa
-  else if (lng >= -20 && lng <= 50 && lat >= -35 && lat <= 35) {
-    regionalFactor = 1.15;
-  }
-  // South America
-  else if (lng >= -80 && lng <= -35 && lat >= -55 && lat <= 15) {
-    regionalFactor = 1.05;
-  }
-
-  return Math.round(baseProduction * systemSize * latitudeFactor * regionalFactor);
 }

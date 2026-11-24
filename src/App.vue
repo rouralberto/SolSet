@@ -4,15 +4,20 @@ import SunMap from './components/SunMap.vue';
 import LocationInput from './components/LocationInput.vue';
 import DateTimeSlider from './components/DateTimeSlider.vue';
 import SunInfo from './components/SunInfo.vue';
+import SunPathChart from './components/SunPathChart.vue';
+import HousePanel from './components/HousePanel.vue';
+import ShadePanel from './components/ShadePanel.vue';
+import SolarPanel from './components/SolarPanel.vue';
+import SiteReport from './components/SiteReport.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ToggleSwitch from './components/ToggleSwitch.vue';
 import {
   parseUrlParams, updateUrlParams, getSettings, saveSettings, sanitizeSettings, debounce,
   addRecentLocation, getRecentLocations, getSavedLocations, saveLocation, removeLocation,
-  isSameLocation, formatCoordinates, copyToClipboard
+  isSameLocation, formatCoordinates, copyToClipboard, getObstacles, saveObstacles
 } from './lib/utils';
 import {
-  getSunTimes, getSunPosition, isSunAboveHorizon, getKeyDates, calculateOptimalHouseOrientation, bearingToCompass
+  getSunTimes, getSunPosition, isSunAboveHorizon, getKeyDates, toBearingPosition
 } from './lib/sunCalc';
 import {
   getTimeZone, zonedTimeToDate, toZonedDateString, toZonedMinutes, addDays, getYear,
@@ -20,6 +25,16 @@ import {
 } from './lib/time';
 import { reverseGeocode } from './lib/mapUtils';
 import { toast, showToast, hideToast } from './lib/toast';
+import { buildClimateYear, estimateClimate, scoreOrientations, hasObstructions } from './lib/solar';
+import { fetchClimate, getCachedClimate, climateKey } from './lib/climate';
+import { fetchTerrainHorizon } from './lib/terrain';
+import { fetchNearbyBuildings } from './lib/buildings';
+import { magneticDeclination, distanceBetween } from './lib/geo';
+import { sampleSolarDay } from './lib/analysis';
+import {
+  createObstacle, sanitizeObstacle, localObstacles, obstacleHorizon, obstaclesUnderHouse,
+  houseFacades, arrayObserver, mergeHorizons, WINDOW_HEIGHT, MAX_OBSTACLES
+} from './lib/site';
 
 const DEFAULT_LOCATION = { lat: 43.3183, lng: -1.9812, name: 'Donostia / San Sebastián' };
 const MINUTES_PER_DAY = 1440;
@@ -30,7 +45,8 @@ const MINUTES_PER_DAY = 1440;
 const initialUrl = parseUrlParams();
 const initialLocation = initialUrl.coordinates || getRecentLocations()[0] || DEFAULT_LOCATION;
 
-const settings = ref(getSettings());
+// A shared link carries the house it was made with
+const settings = ref(sanitizeSettings({ ...getSettings(), ...initialUrl.settings }));
 const coordinates = ref({ lat: initialLocation.lat, lng: initialLocation.lng });
 const zoom = ref(initialUrl.zoom ?? 13);
 const locationName = ref(initialUrl.coordinates ? null : initialLocation.name || null);
@@ -48,12 +64,15 @@ const year = computed(() => getYear(localDate.value));
 
 const sunTimes = computed(() => getSunTimes(noonInstant.value, coordinates.value.lat, coordinates.value.lng));
 const sunPosition = computed(() => getSunPosition(instant.value, coordinates.value.lat, coordinates.value.lng));
+const sunBearing = computed(() => toBearingPosition(sunPosition.value));
 const isSunUp = computed(() => isSunAboveHorizon(sunPosition.value.altitude));
 
 const loading = ref(false);
 const showSettings = ref(false);
 const showShortcuts = ref(false);
+const showReport = ref(false);
 const shortcutsDialog = ref(null);
+const sunMap = ref(null);
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -85,21 +104,213 @@ function updateSettings(patch) {
   saveSettings(settings.value);
 }
 
+const TABS = [
+  { id: 'sun', label: 'Sun', icon: 'bi-sun' },
+  { id: 'house', label: 'House', icon: 'bi-house' },
+  { id: 'shade', label: 'Shading', icon: 'bi-tree' },
+  { id: 'solar', label: 'Solar', icon: 'bi-lightning-charge' }
+];
+
+// ---------------------------------------------------------------------------
+// Site analysis. The map centre changes on every frame while panning, so the
+// heavier calculations follow a debounced copy of it.
+// ---------------------------------------------------------------------------
+const analysisCoords = ref({ ...coordinates.value });
+const settleAnalysisCoords = debounce(() => { analysisCoords.value = { ...coordinates.value }; }, 180);
+watch(coordinates, settleAnalysisCoords);
+
+const house = computed(() => ({
+  width: settings.value.houseWidth,
+  depth: settings.value.houseDepth,
+  wallHeight: settings.value.houseWallHeight,
+  roofPitch: settings.value.houseRoofPitch
+}));
+
+// Climate normals (sunshine and temperature), with an estimate until they arrive
+const climate = ref(getCachedClimate(coordinates.value.lat, coordinates.value.lng) || estimateClimate(coordinates.value.lat));
+const climateLoading = ref(false);
+let climateRequest = 0;
+
+async function loadClimate() {
+  const { lat, lng } = analysisCoords.value;
+  const request = ++climateRequest;
+  const cached = getCachedClimate(lat, lng);
+  if (cached) {
+    climate.value = cached;
+    climateLoading.value = false;
+    return;
+  }
+
+  climate.value = estimateClimate(lat);
+  climateLoading.value = true;
+  try {
+    const fetched = await fetchClimate(lat, lng);
+    if (request === climateRequest) climate.value = fetched;
+  } catch {
+    // Offline or no data: the latitude-based estimate stays, and the panels say so
+  } finally {
+    if (request === climateRequest) climateLoading.value = false;
+  }
+}
+
+watch(() => climateKey(analysisCoords.value.lat, analysisCoords.value.lng), loadClimate, { immediate: true });
+
+// The sun's geometry barely changes over a kilometre: rebuild per ~0.01° of latitude
+const climateLatitude = computed(() => Math.round(analysisCoords.value.lat * 100) / 100);
+const climateYear = computed(() => buildClimateYear(climateLatitude.value, climate.value));
+
+// Magnetic declination changes slowly in space and time
+const declination = computed(() => {
+  const lat = Math.round(analysisCoords.value.lat * 10) / 10;
+  const lng = Math.round(analysisCoords.value.lng * 10) / 10;
+  return magneticDeclination(lat, lng, new Date());
+});
+
+// ---------------------------------------------------------------------------
+// Surroundings: trees and buildings
+// ---------------------------------------------------------------------------
+const obstacles = ref(getObstacles());
+const selectedObstacleId = ref(null);
+const placingKind = ref(null);
+const importingBuildings = ref(false);
+
+const persistObstacles = debounce(() => saveObstacles(obstacles.value), 300);
+watch(obstacles, persistObstacles);
+
+// Live positions for drawing; settled positions for the shade calculations
+const mapObstacles = computed(() => localObstacles(obstacles.value, coordinates.value));
+const nearbyObstacles = computed(() => localObstacles(obstacles.value, analysisCoords.value));
+const overlappingObstacles = computed(() => obstaclesUnderHouse(nearbyObstacles.value));
+
+function startPlacing(kind) {
+  placingKind.value = kind;
+  selectedObstacleId.value = null;
+  if (zoom.value < 17) sunMap.value?.zoomToHouse();
+}
+
+function placeObstacle(coords) {
+  if (!placingKind.value) return;
+  if (obstacles.value.length >= MAX_OBSTACLES) {
+    showToast(`That's the limit of ${MAX_OBSTACLES} objects. Remove some first.`);
+    placingKind.value = null;
+    return;
+  }
+  const obstacle = createObstacle(placingKind.value, coords);
+  obstacles.value = [...obstacles.value, obstacle];
+  selectedObstacleId.value = obstacle.id;
+  placingKind.value = null;
+}
+
+function updateObstacle({ id, patch }) {
+  obstacles.value = obstacles.value.map(o => (o.id === id ? sanitizeObstacle({ ...o, ...patch }) || o : o));
+}
+
+function moveObstacle({ id, lat, lng }) {
+  updateObstacle({ id, patch: { lat, lng } });
+}
+
+function removeObstacle(id) {
+  obstacles.value = obstacles.value.filter(o => o.id !== id);
+  if (selectedObstacleId.value === id) selectedObstacleId.value = null;
+}
+
+function removeNearbyObstacles(importedOnly) {
+  const ids = new Set(nearbyObstacles.value
+    .filter(item => !importedOnly || item.obstacle.kind === 'imported')
+    .map(item => item.obstacle.id));
+  obstacles.value = obstacles.value.filter(o => !ids.has(o.id));
+  selectedObstacleId.value = null;
+}
+
+async function importBuildings() {
+  if (importingBuildings.value) return;
+  importingBuildings.value = true;
+  try {
+    const { lat, lng } = coordinates.value;
+    const found = await fetchNearbyBuildings(lat, lng, 150);
+    const known = new Set(obstacles.value.map(o => o.id));
+    const fresh = found.filter(o => !known.has(o.id)).slice(0, MAX_OBSTACLES - obstacles.value.length);
+    obstacles.value = [...obstacles.value, ...fresh];
+
+    if (!found.length) {
+      showToast('OpenStreetMap has no buildings mapped within 150 m of here.', 'success');
+    } else if (!fresh.length) {
+      showToast('These buildings are already on the map.', 'success');
+    } else {
+      const assumed = fresh.filter(o => o.heightAssumed).length;
+      showToast(`Added ${fresh.length} building${fresh.length === 1 ? '' : 's'}${assumed ? `; ${assumed} without a known height` : ''}.`, 'success');
+    }
+  } catch (error) {
+    showToast(error.message || 'Could not fetch nearby buildings.');
+  } finally {
+    importingBuildings.value = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Terrain horizon (hills and mountains), loaded on request
+// ---------------------------------------------------------------------------
+const terrain = ref({ status: 'off', horizon: null });
+let terrainRequest = 0;
+let terrainSite = null;
+
+async function loadTerrain() {
+  const site = { ...analysisCoords.value };
+  if (!settings.value.useTerrain) {
+    terrainRequest++;
+    terrainSite = null;
+    terrain.value = { status: 'off', horizon: null };
+    return;
+  }
+  // Moving the house around the plot doesn't change the view of distant hills
+  if (terrainSite && terrain.value.status !== 'error' && distanceBetween(terrainSite, site) < 120) return;
+
+  const request = ++terrainRequest;
+  terrainSite = site;
+  terrain.value = { status: 'loading', horizon: terrain.value.horizon };
+  try {
+    const result = await fetchTerrainHorizon(site, { observerHeight: 2 });
+    if (request === terrainRequest) terrain.value = { status: 'ready', ...result };
+  } catch (error) {
+    if (request !== terrainRequest) return;
+    terrainSite = null;
+    terrain.value = { status: 'error', horizon: null, message: `${error.message || 'Terrain data could not be loaded'}.` };
+  }
+}
+
+const loadTerrainSoon = debounce(loadTerrain, 500);
+watch(() => settings.value.useTerrain, loadTerrain, { immediate: true });
+watch(analysisCoords, () => { if (settings.value.useTerrain) loadTerrainSoon(); });
+
+/** Everything that can hide the sun from a point on the plot, or null if nothing does */
+function horizonFor(point) {
+  const parts = [];
+  if (terrain.value.horizon) parts.push(terrain.value.horizon);
+  if (nearbyObstacles.value.length) parts.push(obstacleHorizon(nearbyObstacles.value, point));
+  if (!parts.length) return null;
+  const merged = parts.length === 1 ? parts[0] : mergeHorizons(...parts);
+  return hasObstructions(merged) ? merged : null;
+}
+
+const siteHorizon = computed(() => horizonFor({ x: 0, y: 0, z: WINDOW_HEIGHT }));
+
 // ---------------------------------------------------------------------------
 // House orientation
 // ---------------------------------------------------------------------------
-// Orientation barely changes over short distances; only recompute per ~0.1° of lat/lng
-const orientationKey = computed(() => `${coordinates.value.lat.toFixed(1)},${coordinates.value.lng.toFixed(1)}`);
-const optimalOrientation = computed(() => {
-  const [lat, lng] = orientationKey.value.split(',').map(Number);
-  return calculateOptimalHouseOrientation(lat, lng);
-});
+const orientationScores = computed(() => scoreOrientations(climateYear.value, { horizon: siteHorizon.value }));
+const optimalOrientation = computed(() => orientationScores.value.best);
 
 const houseOrientation = computed(() =>
-  settings.value.autoOrientHouse ? optimalOrientation.value : settings.value.houseOrientation
+  settings.value.autoOrientHouse ? Math.round(optimalOrientation.value) % 360 : settings.value.houseOrientation
 );
 
-const formatOrientation = (degrees) => `${Math.round(degrees) % 360}° (${bearingToCompass(degrees)})`;
+const facades = computed(() =>
+  houseFacades(house.value, houseOrientation.value).map(facade => ({ ...facade, horizon: horizonFor(facade.point) }))
+);
+
+const arrayHorizon = computed(() =>
+  horizonFor(arrayObserver(house.value, houseOrientation.value, settings.value.pvPlacement))
+);
 
 // ---------------------------------------------------------------------------
 // Locations
@@ -151,17 +362,18 @@ function syncUrl() {
     coordinates: coordinates.value,
     zoom: zoom.value,
     date: localDate.value,
-    minutes: minutes.value
+    minutes: minutes.value,
+    settings: settings.value
   });
 }
 
 const debouncedSyncUrl = debounce(syncUrl, 300);
-watch([coordinates, zoom, localDate, minutes], debouncedSyncUrl);
+watch([coordinates, zoom, localDate, minutes, settings], debouncedSyncUrl);
 
 async function shareView() {
   syncUrl();
   if (await copyToClipboard(window.location.href)) {
-    showToast('Link copied. It opens this exact location, date and time.', 'success');
+    showToast('Link copied. It opens this location, date, time and house.', 'success');
   } else {
     showToast('Could not copy the link. Copy it from the address bar instead.');
   }
@@ -190,6 +402,21 @@ function adjustDate(days) {
 }
 
 const keyDates = computed(() => getKeyDates(year.value, coordinates.value.lat));
+
+// The reference days every panel compares: solstices, equinox and the selected day
+const analysisDays = computed(() => {
+  const { lat, lng } = analysisCoords.value;
+  const zone = getTimeZone(lat, lng);
+  const dates = getKeyDates(year.value, lat);
+  const sample = (dateString) => sampleSolarDay(zonedTimeToDate(dateString, 720, zone), lat, lng, 4);
+  const find = (key) => dates.find(d => d.key === key).dateString;
+  return {
+    winter: sample(find('winter')),
+    equinox: sample(find('spring')),
+    summer: sample(find('summer')),
+    selected: sample(localDate.value)
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Animation: plays through the selected day, skipping the night
@@ -253,13 +480,21 @@ function isEditable(target) {
 
 function handleKeydown(e) {
   if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (isEditable(e.target)) return;
 
   if (e.key === 'Escape') {
+    if (placingKind.value) {
+      placingKind.value = null;
+      return;
+    }
+    if (isEditable(e.target)) return;
     showShortcuts.value = false;
     showSettings.value = false;
+    showReport.value = false;
+    selectedObstacleId.value = null;
     return;
   }
+
+  if (isEditable(e.target)) return;
 
   if (e.key === '?') {
     showShortcuts.value = !showShortcuts.value;
@@ -267,7 +502,7 @@ function handleKeydown(e) {
   }
 
   // Don't act behind an open dialog
-  if (showShortcuts.value || showSettings.value) return;
+  if (showShortcuts.value || showSettings.value || showReport.value) return;
 
   switch (e.key.toLowerCase()) {
     case 'n':
@@ -281,6 +516,13 @@ function handleKeydown(e) {
       break;
     case 'd':
       toggleTheme();
+      break;
+    case 'r':
+      showReport.value = true;
+      break;
+    case 'delete':
+    case 'backspace':
+      if (selectedObstacleId.value) removeObstacle(selectedObstacleId.value);
       break;
     case ' ':
       // Let Space activate a focused button/switch/link as usual
@@ -307,6 +549,11 @@ watch(showShortcuts, async (open) => {
     await nextTick();
     shortcutsDialog.value?.focus();
   }
+});
+
+// Selecting something on the map opens the tab where it can be edited
+watch(selectedObstacleId, (id) => {
+  if (id && settings.value.activeTab !== 'shade') updateSettings({ activeTab: 'shade' });
 });
 
 // ---------------------------------------------------------------------------
@@ -352,7 +599,7 @@ onUnmounted(() => {
         </div>
         <div class="brand-text">
           <h1>SolSet</h1>
-          <span class="brand-tagline">Sun Position Tracker</span>
+          <span class="brand-tagline">Sun &amp; house siting</span>
         </div>
       </div>
 
@@ -365,6 +612,17 @@ onUnmounted(() => {
       </div>
 
       <div class="header-actions">
+        <button
+          type="button"
+          class="solset-btn solset-btn-secondary report-btn solset-tooltip"
+          data-tooltip="Printable site report (R)"
+          @click="showReport = true"
+          aria-label="Open the printable site report"
+        >
+          <i class="bi bi-file-earmark-text"></i>
+          <span class="report-btn-text">Report</span>
+        </button>
+
         <button
           type="button"
           class="solset-btn solset-btn-ghost solset-btn-icon solset-tooltip"
@@ -434,127 +692,157 @@ onUnmounted(() => {
           @toggle-animation="toggleAnimation"
         />
 
-        <!-- Quick Date Jumps -->
-        <div class="solset-card">
-          <div class="solset-card-header">
-            <h2 class="card-title"><i class="bi bi-calendar-event"></i>Key Dates {{ year }}</h2>
-            <span class="hemisphere-note">{{ coordinates.lat >= 0 ? 'Northern' : 'Southern' }} hemisphere</span>
-          </div>
-          <div class="solset-card-body">
-            <div class="quick-dates-grid">
-              <button
-                v-for="keyDate in keyDates"
-                :key="keyDate.key"
-                type="button"
-                class="quick-date-btn"
-                :class="{ active: localDate === keyDate.dateString }"
-                :aria-pressed="localDate === keyDate.dateString"
-                @click="localDate = keyDate.dateString"
-              >
-                <i :class="['bi', keyDate.icon]" :style="{ color: keyDate.color }"></i>
-                <span class="quick-date-label">{{ keyDate.label }}</span>
-                <span class="quick-date-date">{{ formatDisplayDate(keyDate.dateString, { month: 'short', day: 'numeric' }) }}</span>
-              </button>
-            </div>
-          </div>
+        <div class="sidebar-tabs" role="tablist" aria-label="Analysis">
+          <button
+            v-for="tab in TABS"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :id="`tab-${tab.id}`"
+            :aria-selected="settings.activeTab === tab.id"
+            :aria-controls="`panel-${tab.id}`"
+            :class="['sidebar-tab', { active: settings.activeTab === tab.id }]"
+            @click="updateSettings({ activeTab: tab.id })"
+          >
+            <i :class="['bi', tab.icon]"></i>
+            {{ tab.label }}
+          </button>
         </div>
 
-        <!-- Feature Toggles -->
-        <div class="solset-card">
-          <div class="solset-card-header">
-            <h2 class="card-title"><i class="bi bi-toggles"></i>Visualization</h2>
-          </div>
-          <div class="solset-card-body">
-            <div class="toggle-row">
-              <div class="toggle-info">
-                <i class="bi bi-house"></i>
-                <span>House layout</span>
-                <span class="kbd hide-on-touch">H</span>
-              </div>
-              <ToggleSwitch
-                :model-value="settings.showHouse"
-                @update:model-value="updateSettings({ showHouse: $event })"
-                label="House layout"
-              />
+        <!-- Sun -->
+        <div v-if="settings.activeTab === 'sun'" id="panel-sun" class="tab-panel" role="tabpanel" aria-labelledby="tab-sun">
+          <div class="solset-card">
+            <div class="solset-card-header">
+              <h2 class="card-title"><i class="bi bi-calendar-event"></i>Key Dates {{ year }}</h2>
+              <span class="hemisphere-note">{{ coordinates.lat >= 0 ? 'Northern' : 'Southern' }} hemisphere</span>
             </div>
-
-            <template v-if="settings.showHouse">
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <i class="bi bi-compass"></i>
-                  <span>Auto-orient</span>
-                </div>
-                <ToggleSwitch
-                  :model-value="settings.autoOrientHouse"
-                  @update:model-value="updateSettings({ autoOrientHouse: $event })"
-                  label="Auto-orient house"
-                />
-              </div>
-
-              <div class="orientation-display">
-                <span class="text-muted">{{ settings.autoOrientHouse ? 'Optimal: day side faces' : 'Day side faces' }}</span>
-                <span class="solset-badge solset-badge-gold">{{ formatOrientation(houseOrientation) }}</span>
-              </div>
-
-              <div v-if="!settings.autoOrientHouse" class="orientation-control">
-                <input
-                  type="range"
-                  class="solset-slider orientation-slider"
-                  min="0"
-                  max="359"
-                  step="1"
-                  :value="settings.houseOrientation"
-                  @input="updateSettings({ houseOrientation: Number($event.target.value) })"
-                  aria-label="House orientation in degrees"
-                  :aria-valuetext="formatOrientation(settings.houseOrientation)"
-                />
-                <div class="orientation-markers">
-                  <span>N</span><span>E</span><span>S</span><span>W</span><span>N</span>
-                </div>
+            <div class="solset-card-body">
+              <div class="quick-dates-grid">
                 <button
+                  v-for="keyDate in keyDates"
+                  :key="keyDate.key"
                   type="button"
-                  class="solset-btn solset-btn-ghost btn-xs"
-                  @click="updateSettings({ houseOrientation: Math.round(optimalOrientation) })"
+                  class="quick-date-btn"
+                  :class="{ active: localDate === keyDate.dateString }"
+                  :aria-pressed="localDate === keyDate.dateString"
+                  @click="localDate = keyDate.dateString"
                 >
-                  Reset to optimal ({{ formatOrientation(optimalOrientation) }})
+                  <i :class="['bi', keyDate.icon]" :style="{ color: keyDate.color }"></i>
+                  <span class="quick-date-label">{{ keyDate.label }}</span>
+                  <span class="quick-date-date">{{ formatDisplayDate(keyDate.dateString, { month: 'short', day: 'numeric' }) }}</span>
                 </button>
               </div>
-              <p v-else class="hint">
-                Faces the {{ coordinates.lat >= 0 ? 'south' : 'north' }} for winter sun, turned slightly east for morning light.
-              </p>
-            </template>
 
-            <div class="solset-divider"></div>
+              <div class="solset-divider"></div>
 
-            <div class="toggle-row">
-              <div class="toggle-info">
-                <i class="bi bi-calendar3"></i>
-                <span>Seasonal sun paths</span>
-                <span class="kbd hide-on-touch">S</span>
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <i class="bi bi-calendar3"></i>
+                  <span>Show all four paths on the map</span>
+                  <span class="kbd hide-on-touch">S</span>
+                </div>
+                <ToggleSwitch
+                  :model-value="settings.showSeasonalPaths"
+                  @update:model-value="updateSettings({ showSeasonalPaths: $event })"
+                  label="Show seasonal sun paths on the map"
+                />
               </div>
-              <ToggleSwitch
-                :model-value="settings.showSeasonalPaths"
-                @update:model-value="updateSettings({ showSeasonalPaths: $event })"
-                label="Seasonal sun paths"
+            </div>
+          </div>
+
+          <div class="solset-card">
+            <div class="solset-card-header">
+              <h2 class="card-title"><i class="bi bi-graph-up"></i>Sun path</h2>
+              <span class="hemisphere-note">facing {{ coordinates.lat >= 0 ? 'south' : 'north' }}</span>
+            </div>
+            <div class="solset-card-body">
+              <SunPathChart
+                :latitude="analysisCoords.lat"
+                :longitude="analysisCoords.lng"
+                :time-zone="timeZone"
+                :local-date="localDate"
+                :key-dates="keyDates"
+                :sun="sunBearing"
+                :horizon="siteHorizon"
+                :house-orientation="settings.showHouse ? houseOrientation : null"
               />
             </div>
           </div>
+
+          <SunInfo
+            :coordinates="coordinates"
+            :location-name="locationName"
+            :sun-position="sunPosition"
+            :sun-times="sunTimes"
+            :time-zone="timeZone"
+            :local-date="localDate"
+            :minutes="minutes"
+            :is-saved="!!currentSavedLocation"
+            :shadow-height="settings.shadowHeight"
+            :units="settings.units"
+            :declination="declination"
+            @toggle-save="toggleSaveLocation"
+            @update:shadow-height="updateSettings({ shadowHeight: $event })"
+          />
         </div>
 
-        <!-- Sun Data -->
-        <SunInfo
-          :coordinates="coordinates"
-          :location-name="locationName"
-          :sun-position="sunPosition"
-          :sun-times="sunTimes"
-          :time-zone="timeZone"
-          :local-date="localDate"
-          :minutes="minutes"
-          :is-saved="!!currentSavedLocation"
-          :shadow-height="settings.shadowHeight"
-          :solar-system-size="settings.solarSystemSize"
-          @toggle-save="toggleSaveLocation"
-        />
+        <!-- House -->
+        <div v-else-if="settings.activeTab === 'house'" id="panel-house" class="tab-panel" role="tabpanel" aria-labelledby="tab-house">
+          <HousePanel
+            :settings="settings"
+            :latitude="analysisCoords.lat"
+            :time-zone="timeZone"
+            :house-orientation="houseOrientation"
+            :optimal-orientation="optimalOrientation"
+            :scores="orientationScores"
+            :climate="climate"
+            :climate-loading="climateLoading"
+            :facades="facades"
+            :days="analysisDays"
+            :declination="declination"
+            :has-obstructions="!!siteHorizon"
+            @update-settings="updateSettings"
+          />
+        </div>
+
+        <!-- Shading -->
+        <div v-else-if="settings.activeTab === 'shade'" id="panel-shade" class="tab-panel" role="tabpanel" aria-labelledby="tab-shade">
+          <ShadePanel
+            :settings="settings"
+            :time-zone="timeZone"
+            :obstacles="nearbyObstacles"
+            :selected-id="selectedObstacleId"
+            :placing-kind="placingKind"
+            :importing="importingBuildings"
+            :terrain="terrain"
+            :days="analysisDays"
+            :day-facade="facades[0]"
+            :overlapping="overlappingObstacles"
+            @update-settings="updateSettings"
+            @start-placing="startPlacing"
+            @cancel-placing="placingKind = null"
+            @select="selectedObstacleId = $event"
+            @update-obstacle="updateObstacle"
+            @remove-obstacle="removeObstacle"
+            @remove-imported="removeNearbyObstacles(true)"
+            @remove-all="removeNearbyObstacles(false)"
+            @import-buildings="importBuildings"
+          />
+        </div>
+
+        <!-- Solar -->
+        <div v-else id="panel-solar" class="tab-panel" role="tabpanel" aria-labelledby="tab-solar">
+          <SolarPanel
+            :settings="settings"
+            :latitude="climateLatitude"
+            :climate-year="climateYear"
+            :climate="climate"
+            :climate-loading="climateLoading"
+            :house-orientation="houseOrientation"
+            :horizon="arrayHorizon"
+            @update-settings="updateSettings"
+          />
+        </div>
       </aside>
 
       <!-- Map Area -->
@@ -578,6 +866,7 @@ onUnmounted(() => {
         </div>
 
         <SunMap
+          ref="sunMap"
           :coordinates="coordinates"
           @update:coordinates="updateCoordinatesFromMap"
           v-model:zoom="zoom"
@@ -588,6 +877,14 @@ onUnmounted(() => {
           :show-house="settings.showHouse"
           :show-seasonal-paths="settings.showSeasonalPaths"
           :house-orientation="houseOrientation"
+          :house="house"
+          :obstacles="mapObstacles"
+          :selected-obstacle-id="selectedObstacleId"
+          :placing-kind="placingKind"
+          :units="settings.units"
+          @place-obstacle="placeObstacle"
+          @select-obstacle="selectedObstacleId = $event"
+          @move-obstacle="moveObstacle"
         />
       </div>
     </main>
@@ -644,6 +941,14 @@ onUnmounted(() => {
                 <span class="shortcut-keys"><span class="kbd">D</span></span>
                 <span>Toggle dark mode</span>
               </div>
+              <div class="shortcut-row">
+                <span class="shortcut-keys"><span class="kbd">R</span></span>
+                <span>Open the site report</span>
+              </div>
+              <div class="shortcut-row">
+                <span class="shortcut-keys"><span class="kbd">Del</span></span>
+                <span>Remove the selected tree or building</span>
+              </div>
             </div>
 
             <div class="shortcut-group">
@@ -661,6 +966,32 @@ onUnmounted(() => {
         </div>
       </div>
     </Teleport>
+
+    <!-- Site Report -->
+    <SiteReport
+      v-if="showReport"
+      :settings="settings"
+      :coordinates="analysisCoords"
+      :location-name="locationName"
+      :time-zone="timeZone"
+      :local-date="localDate"
+      :key-dates="keyDates"
+      :sun="sunBearing"
+      :house="house"
+      :house-orientation="houseOrientation"
+      :optimal-orientation="optimalOrientation"
+      :scores="orientationScores"
+      :facades="facades"
+      :days="analysisDays"
+      :obstacles="nearbyObstacles"
+      :site-horizon="siteHorizon"
+      :array-horizon="arrayHorizon"
+      :terrain="terrain"
+      :climate="climate"
+      :climate-year="climateYear"
+      :declination="declination"
+      @close="showReport = false"
+    />
 
     <!-- Settings Panel -->
     <SettingsPanel
@@ -789,6 +1120,58 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.sidebar-tabs {
+  position: sticky;
+  top: -16px;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.sidebar-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 4px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.sidebar-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.sidebar-tab.active {
+  color: var(--sun-orange);
+  background: var(--bg-accent);
+}
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.report-btn {
+  padding: 8px 12px;
+  margin-right: 4px;
+}
+
 /* Map Area */
 .app-map {
   flex: 1;
@@ -912,44 +1295,11 @@ onUnmounted(() => {
   font-size: 16px;
 }
 
-.orientation-display {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 0 4px;
-  font-size: 13px;
-}
 
-.orientation-control {
-  padding: 8px 0 0;
-}
 
-.orientation-slider {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-}
 
-.orientation-markers {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 2px 0;
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--text-tertiary);
-}
 
-.btn-xs {
-  margin-top: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
 
-.hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--text-tertiary);
-}
 
 /* Modal */
 .modal-overlay {
@@ -1105,6 +1455,15 @@ onUnmounted(() => {
     border-right: none;
     overflow: visible;
     padding: 12px;
+  }
+
+  /* The page scrolls here, so the tabs stick below the sticky header */
+  .sidebar-tabs {
+    position: static;
+  }
+
+  .report-btn-text {
+    display: none;
   }
 }
 </style>
